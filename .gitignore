@@ -14,7 +14,10 @@ static/public/static/altcha.umd.js
 
 config.toml
 docker-compose.override.yml
+deploy/.env
+deploy/secrets/
 node_modules
 listmonk
 dist/*
 uploads/
+mailview-imports/

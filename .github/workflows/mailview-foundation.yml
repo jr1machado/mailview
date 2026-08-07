@@ -1,0 +1,58 @@
+name: MailView Foundation
+
+on:
+  push:
+    branches: [master, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build backend
+        run: make build
+
+  security-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan tracked history and workspace for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+          cache: true
+      - name: Scan Go dependencies for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  configuration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject whitespace errors
+        run: git diff --check HEAD^ HEAD
+      - name: Verify production Compose syntax
+        run: |
+          mkdir -p deploy/secrets
+          : > deploy/secrets/postgres-user
+          : > deploy/secrets/postgres-password
+          : > deploy/secrets/postgres-db
+          : > deploy/secrets/database-url
+          docker compose --env-file deploy/.env.example -f deploy/compose.production.yml config --quiet

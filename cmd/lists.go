@@ -6,12 +6,22 @@ import (
 	"strings"
 
 	"github.com/knadh/listmonk/internal/auth"
+	"github.com/knadh/listmonk/internal/mailview/dataplane"
 	"github.com/knadh/listmonk/models"
 	"github.com/labstack/echo/v4"
 )
 
 // GetLists retrieves lists with additional metadata like subscriber counts.
 func (a *App) GetLists(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		res, err := a.dataplane.ListLists(scoped)
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{models.PageResults{Results: res, Total: len(res), Page: 1, PerPage: len(res)}})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -73,6 +83,15 @@ func (a *App) GetLists(c echo.Context) error {
 // GetList retrieves a single list by id.
 // It's permission checked by the listPerm middleware.
 func (a *App) GetList(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		out, err := a.dataplane.GetList(scoped, getID(c))
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -93,6 +112,19 @@ func (a *App) GetList(c echo.Context) error {
 
 // CreateList handles list creation.
 func (a *App) CreateList(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		var in dataplane.CreateListInput
+		if err := c.Bind(&in); err != nil {
+			return err
+		}
+		out, err := a.dataplane.CreateList(scoped, in)
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	l := models.List{}
 	if err := c.Bind(&l); err != nil {
 		return err
@@ -114,6 +146,22 @@ func (a *App) CreateList(c echo.Context) error {
 // UpdateList handles list modification.
 // It's permission checked by the listPerm middleware.
 func (a *App) UpdateList(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		var in struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := c.Bind(&in); err != nil {
+			return err
+		}
+		out, err := a.dataplane.UpdateList(scoped, getID(c), dataplane.CreateListInput{Name: in.Name, Description: in.Description})
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -145,6 +193,14 @@ func (a *App) UpdateList(c echo.Context) error {
 
 // DeleteList deletes a single list by ID.
 func (a *App) DeleteList(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		if err := a.dataplane.DeleteList(scoped, getID(c)); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
 	id := getID(c)
 
 	// Check if the user has manage permission for the list.

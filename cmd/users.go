@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/knadh/listmonk/internal/auth"
 	"github.com/knadh/listmonk/internal/core"
+	"github.com/knadh/listmonk/internal/mailview/control"
 	"github.com/knadh/listmonk/internal/utils"
 	"github.com/knadh/listmonk/models"
 	"github.com/labstack/echo/v4"
@@ -307,11 +309,14 @@ func (a *App) EnableTOTP(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("users.invalidTOTPCode"))
 	}
 
-	// Enable TOTP in the DB.
-	if err := a.core.SetTwoFA(u.ID, models.TwofaTypeTOTP, secret); err != nil {
+	// New enrollments require field-level encryption. Legacy plaintext keys are
+	// read only for compatibility and are replaced on the next enrollment.
+	if err := a.mfa.EnableTOTP(c.Request().Context(), u.ID, secret, mailviewActor(c)); err != nil {
+		if errors.Is(err, control.ErrMFAEncryptionUnavailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "MFA encryption key is not configured")
+		}
 		return err
 	}
-
 	return c.JSON(http.StatusOK, okResp{true})
 }
 
@@ -337,8 +342,8 @@ func (a *App) DisableTOTP(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, a.i18n.T("users.invalidPassword"))
 	}
 
-	// Disable TOTP in the DB.
-	if err := a.core.SetTwoFA(u.ID, models.TwofaTypeNone, ""); err != nil {
+	// Disable TOTP and append the audit event in the same transaction.
+	if err := a.mfa.DisableTOTP(c.Request().Context(), u.ID, mailviewActor(c)); err != nil {
 		return err
 	}
 
