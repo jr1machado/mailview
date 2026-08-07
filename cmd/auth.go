@@ -717,8 +717,8 @@ func (a *App) renderTwofaPage(c echo.Context, token, next, errMsg string) error 
 func (a *App) doTwofaVerify(c echo.Context, token string, userID int, next string) error {
 	totpCode := strings.TrimSpace(c.FormValue("totp_code"))
 
-	// Validate.
-	if !strHasLen(totpCode, 6, 6) {
+	// The same field accepts a six digit TOTP or a recovery code.
+	if !strHasLen(totpCode, 6, 32) {
 		return a.renderTwofaPage(c, token, next, a.i18n.T("globals.messages.invalidValue"))
 	}
 
@@ -733,8 +733,24 @@ func (a *App) doTwofaVerify(c echo.Context, token string, userID int, next strin
 		return a.renderTwofaPage(c, token, next, a.i18n.T("users.twoFANotEnabled"))
 	}
 
-	// Verify the TOTP code.
-	valid := totp.Validate(totpCode, user.TwofaKey.String)
+	// Prefer the encrypted MailView secret. A legacy plaintext key is read only
+	// to avoid locking existing administrators out before they re-enroll.
+	secret := user.TwofaKey.String
+	if encryptedSecret, found, err := a.mfa.TOTPSecret(c.Request().Context(), user.ID); err != nil {
+		a.log.Printf("loading encrypted TOTP secret for user_id=%d: %v", user.ID, err)
+		return a.renderTwofaPage(c, token, next, a.i18n.T("globals.messages.internalError"))
+	} else if found {
+		secret = encryptedSecret
+	}
+	valid := totp.Validate(totpCode, secret)
+	if !valid {
+		used, err := a.mailview.UseRecoveryCode(c.Request().Context(), user.ID, totpCode, mailviewActor(c))
+		if err != nil {
+			a.log.Printf("using recovery code for user_id=%d: %v", user.ID, err)
+			return a.renderTwofaPage(c, token, next, a.i18n.T("globals.messages.internalError"))
+		}
+		valid = used
+	}
 	if !valid {
 		return a.renderTwofaPage(c, token, next, a.i18n.T("globals.messages.invalidValue"))
 	}

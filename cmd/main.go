@@ -22,6 +22,10 @@ import (
 	"github.com/knadh/listmonk/internal/core"
 	"github.com/knadh/listmonk/internal/events"
 	"github.com/knadh/listmonk/internal/i18n"
+	mvcontrol "github.com/knadh/listmonk/internal/mailview/control"
+	"github.com/knadh/listmonk/internal/mailview/dataplane"
+	"github.com/knadh/listmonk/internal/mailview/importjob"
+	mvmigrations "github.com/knadh/listmonk/internal/mailview/migrations"
 	"github.com/knadh/listmonk/internal/manager"
 	"github.com/knadh/listmonk/internal/media"
 	"github.com/knadh/listmonk/internal/messenger/email"
@@ -33,25 +37,31 @@ import (
 
 // App contains the "global" shared components, controllers and fields.
 type App struct {
-	cfg        *Config
-	urlCfg     *UrlConfig
-	fs         stuffbin.FileSystem
-	db         *sqlx.DB
-	queries    *models.Queries
-	core       *core.Core
-	manager    *manager.Manager
-	messengers []manager.Messenger
-	emailMsgr  manager.Messenger
-	importer   *subimporter.Importer
-	auth       *auth.Auth
-	media      media.Store
-	bounce     *bounce.Manager
-	captcha    *captcha.Captcha
-	i18n       *i18n.I18n
-	pg         *paginator.Paginator
-	events     *events.Events
-	log        *log.Logger
-	bufLog     *buflog.BufLog
+	cfg                  *Config
+	urlCfg               *UrlConfig
+	fs                   stuffbin.FileSystem
+	db                   *sqlx.DB
+	queries              *models.Queries
+	core                 *core.Core
+	manager              *manager.Manager
+	messengers           []manager.Messenger
+	emailMsgr            manager.Messenger
+	importer             *subimporter.Importer
+	auth                 *auth.Auth
+	media                media.Store
+	bounce               *bounce.Manager
+	captcha              *captcha.Captcha
+	i18n                 *i18n.I18n
+	pg                   *paginator.Paginator
+	events               *events.Events
+	log                  *log.Logger
+	bufLog               *buflog.BufLog
+	mailview             *mvcontrol.Service
+	dataplane            *dataplane.Service
+	importJobs           *importjob.Service
+	mfa                  *mvcontrol.MFA
+	tenantBaseDomain     string
+	tenantRoutingEnabled bool
 
 	about         about
 	fnOptinNotify func(models.Subscriber, []int) (int, error)
@@ -164,6 +174,9 @@ func init() {
 		// migration version in the DB.
 		lo.Printf("running upgrade...")
 		upgrade(db, fs, !ko.Bool("yes"), !isNightly)
+		if err := mvmigrations.Upgrade(context.Background(), db); err != nil {
+			lo.Fatalf("running MailView migrations: %v", err)
+		}
 		os.Exit(0)
 	}
 
@@ -176,6 +189,10 @@ func init() {
 	} else {
 		// Before the queries are prepared, see if there are pending upgrades.
 		checkUpgrade(db)
+	}
+
+	if err := mvmigrations.Upgrade(context.Background(), db); err != nil {
+		lo.Fatalf("running MailView migrations: %v", err)
 	}
 
 	// Read the SQL queries from the queries file.
@@ -242,6 +259,16 @@ func main() {
 		}
 	}
 
+	mfa, err := mvcontrol.NewMFA(db, ko.String("mailview.mfa_encryption_key"))
+	if err != nil {
+		lo.Fatalf("initializing MailView MFA encryption: %v", err)
+	}
+
+	importJobs, err := importjob.New(db, ko.String("mailview.import_storage_dir"), ko.String("mailview.import_signing_key"))
+	if err != nil {
+		lo.Fatalf("initializing MailView import signing: %v", err)
+	}
+
 	// Initialize the global admin/sub e-mail notifier.
 	initNotifs(fs, i18n, emailMsgr, urlCfg, ko)
 
@@ -264,24 +291,30 @@ func main() {
 	// =========================================================================
 	// Initialize the App{} with all the global shared components, controllers and fields.
 	app := &App{
-		cfg:        cfg,
-		urlCfg:     urlCfg,
-		fs:         fs,
-		db:         db,
-		queries:    queries,
-		core:       core,
-		manager:    mgr,
-		messengers: msgrs,
-		emailMsgr:  emailMsgr,
-		importer:   importer,
-		auth:       auth,
-		media:      media,
-		bounce:     bounce,
-		captcha:    initCaptcha(),
-		i18n:       i18n,
-		log:        lo,
-		events:     evStream,
-		bufLog:     bufLog,
+		cfg:                  cfg,
+		urlCfg:               urlCfg,
+		fs:                   fs,
+		db:                   db,
+		queries:              queries,
+		core:                 core,
+		manager:              mgr,
+		messengers:           msgrs,
+		emailMsgr:            emailMsgr,
+		importer:             importer,
+		auth:                 auth,
+		media:                media,
+		bounce:               bounce,
+		captcha:              initCaptcha(),
+		i18n:                 i18n,
+		log:                  lo,
+		events:               evStream,
+		bufLog:               bufLog,
+		mailview:             mvcontrol.New(db),
+		dataplane:            dataplane.New(db),
+		importJobs:           importJobs,
+		tenantBaseDomain:     strings.ToLower(strings.TrimSpace(ko.String("mailview.tenant_base_domain"))),
+		tenantRoutingEnabled: ko.Bool("mailview.tenant_routing_enabled"),
+		mfa:                  mfa,
 
 		pg: paginator.New(paginator.Opt{
 			DefaultPerPage: 20,

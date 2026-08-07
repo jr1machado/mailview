@@ -219,6 +219,31 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		g.PUT("/api/roles/lists/:id", pm(hasID(a.UpdateListRole), "roles:manage"))
 		g.DELETE("/api/roles/:id", pm(hasID(a.DeleteRole), "roles:manage"))
 
+		// MailView Control Plane. These endpoints are intentionally limited to
+		// the existing platform Super Admin until platform RBAC is activated.
+		cp := g.Group("/api/mailview", a.requirePlatformAdmin)
+		cp.GET("/tenants", a.ListMailViewTenants)
+		cp.POST("/tenants", a.CreateMailViewTenant)
+		cp.GET("/tenants/:tenantID", a.GetMailViewTenant)
+		cp.PATCH("/tenants/:tenantID", a.UpdateMailViewTenantStatus)
+		cp.GET("/tenants/:tenantID/roles", a.ListMailViewRoles)
+		cp.GET("/tenants/:tenantID/memberships", a.ListMailViewMemberships)
+		cp.POST("/tenants/:tenantID/memberships", a.CreateMailViewMembership)
+		cp.PUT("/tenants/:tenantID/memberships/:membershipID/roles", a.ReplaceMailViewMembershipRoles)
+		cp.GET("/tenants/:tenantID/audit-events", a.ListMailViewAuditEvents)
+		cp.GET("/tenants/:tenantID/data/lists", a.ListMailViewLists)
+		cp.POST("/tenants/:tenantID/data/lists", a.CreateMailViewList)
+		cp.GET("/tenants/:tenantID/data/subscribers", a.ListMailViewSubscribers)
+		cp.POST("/tenants/:tenantID/data/subscribers", a.CreateMailViewSubscriber)
+		cp.GET("/tenants/:tenantID/data/import-jobs", a.ListMailViewImportJobs)
+		cp.POST("/tenants/:tenantID/data/import-jobs", a.CreateMailViewImportJob)
+		cp.GET("/tenants/:tenantID/data/import-jobs/:jobID", a.GetMailViewImportJob)
+		cp.POST("/tenants/:tenantID/data/import-jobs/:jobID/cancel", a.CancelMailViewImportJob)
+
+		// Available to any authenticated user with TOTP enabled. Codes are
+		// displayed only in this response and persisted as bcrypt hashes.
+		g.POST("/api/mailview/profile/mfa/recovery-codes", a.GenerateMailViewRecoveryCodes)
+
 		if a.cfg.BounceWebhooksEnabled {
 			// Private authenticated bounce endpoint.
 			g.POST("/webhooks/bounce", pm(a.BounceWebhook, "webhooks:post_bounce"))

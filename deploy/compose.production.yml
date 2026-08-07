@@ -1,0 +1,82 @@
+name: mailview
+
+# Fase 0: topologia de produção. As imagens de frontend, API e worker serão
+# publicadas nas fases subsequentes; o arquivo evita defaults e :latest desde já.
+services:
+  proxy:
+    image: ${MAILVIEW_PROXY_IMAGE:?defina MAILVIEW_PROXY_IMAGE}
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    ports: ["80:80", "443:443"]
+    networks: [edge, app]
+
+  frontend:
+    image: ${MAILVIEW_FRONTEND_IMAGE:?defina MAILVIEW_FRONTEND_IMAGE}
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [app]
+
+  api:
+    image: ${MAILVIEW_API_IMAGE:?defina MAILVIEW_API_IMAGE}
+    read_only: true
+    user: "10001:10001"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets: [database_url]
+    networks: [app, data]
+
+  worker:
+    image: ${MAILVIEW_WORKER_IMAGE:?defina MAILVIEW_WORKER_IMAGE}
+    read_only: true
+    user: "10001:10001"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets: [database_url]
+    networks: [app, data]
+
+  postgres:
+    image: ${MAILVIEW_POSTGRES_IMAGE:?defina MAILVIEW_POSTGRES_IMAGE}
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB_FILE: /run/secrets/postgres_db
+    secrets: [postgres_user, postgres_password, postgres_db]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    networks: [data]
+
+  redis:
+    image: ${MAILVIEW_REDIS_IMAGE:?defina MAILVIEW_REDIS_IMAGE}
+    command: ["redis-server", "--appendonly", "yes"]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    volumes: [redis-data:/data]
+    networks: [data]
+
+networks:
+  edge: {}
+  app:
+    internal: true
+  data:
+    internal: true
+
+secrets:
+  database_url:
+    file: ${MAILVIEW_DATABASE_URL_FILE:?defina MAILVIEW_DATABASE_URL_FILE}
+  postgres_user:
+    file: ${MAILVIEW_DB_USER_FILE:?defina MAILVIEW_DB_USER_FILE}
+  postgres_password:
+    file: ${MAILVIEW_DB_PASSWORD_FILE:?defina MAILVIEW_DB_PASSWORD_FILE}
+  postgres_db:
+    file: ${MAILVIEW_DB_NAME_FILE:?defina MAILVIEW_DB_NAME_FILE}
+
+volumes:
+  postgres-data: {}
+  redis-data: {}

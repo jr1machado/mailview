@@ -12,6 +12,7 @@ import (
 
 	"github.com/knadh/listmonk/internal/auth"
 	"github.com/knadh/listmonk/internal/i18n"
+	"github.com/knadh/listmonk/internal/mailview/dataplane"
 	"github.com/knadh/listmonk/internal/notifs"
 	"github.com/knadh/listmonk/internal/subimporter"
 	"github.com/knadh/listmonk/models"
@@ -57,6 +58,15 @@ var (
 
 // GetSubscriber handles the retrieval of a single subscriber by ID.
 func (a *App) GetSubscriber(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		out, err := a.dataplane.GetSubscriber(scoped, getID(c))
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	user := auth.GetUser(c)
 
 	// Check if the user has access to at least one of the lists on the subscriber.
@@ -97,6 +107,15 @@ func (a *App) GetSubscriberActivity(c echo.Context) error {
 
 // QuerySubscribers handles querying subscribers based on an arbitrary SQL expression.
 func (a *App) QuerySubscribers(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		res, err := a.dataplane.ListSubscribers(scoped)
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{models.PageResults{Results: res, Total: len(res), Page: 1, PerPage: len(res)}})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -147,6 +166,26 @@ func (a *App) QuerySubscribers(c echo.Context) error {
 
 // ExportSubscribers handles querying subscribers based on an arbitrary SQL expression.
 func (a *App) ExportSubscribers(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		rows, err := a.dataplane.ListSubscribers(scoped)
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		hdr := c.Response().Header()
+		hdr.Set(echo.HeaderContentType, "text/csv; charset=utf-8")
+		hdr.Set(echo.HeaderContentDisposition, "attachment; filename=subscribers.csv")
+		wr := csv.NewWriter(c.Response())
+		_ = wr.Write([]string{"uuid", "email", "name", "status"})
+		for _, row := range rows {
+			if err := wr.Write([]string{row.UUID.String(), row.Email, row.Name, row.Status}); err != nil {
+				return err
+			}
+		}
+		wr.Flush()
+		return wr.Error()
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -223,6 +262,19 @@ loop:
 
 // CreateSubscriber handles the creation of a new subscriber.
 func (a *App) CreateSubscriber(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		var in dataplane.CreateSubscriberInput
+		if err := c.Bind(&in); err != nil {
+			return err
+		}
+		out, err := a.dataplane.CreateSubscriber(scoped, in)
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -257,6 +309,22 @@ func (a *App) CreateSubscriber(c echo.Context) error {
 
 // UpdateSubscriber handles modification of a subscriber.
 func (a *App) UpdateSubscriber(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		var in struct {
+			Email string `json:"email"`
+			Name  string `json:"name"`
+		}
+		if err := c.Bind(&in); err != nil {
+			return err
+		}
+		out, err := a.dataplane.UpdateSubscriber(scoped, getID(c), dataplane.CreateSubscriberInput{Email: in.Email, Name: in.Name})
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -518,6 +586,14 @@ func (a *App) ManageSubscriberLists(c echo.Context) error {
 
 // DeleteSubscriber handles deletion of a single subscriber.
 func (a *App) DeleteSubscriber(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContext(c); err != nil {
+		return err
+	} else if scoped != nil {
+		if err := a.dataplane.DeleteSubscriber(scoped, getID(c)); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
 	user := auth.GetUser(c)
 
 	// Delete the subscribers from the DB.
