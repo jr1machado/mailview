@@ -4,7 +4,6 @@ env:
   - GO111MODULE=on
   - CGO_ENABLED=0
   - GITHUB_ORG=jr1machado
-  - DOCKER_ORG=jr1machado
 
 project_name: MailView
 
@@ -55,8 +54,6 @@ dockers:
     ids:
       - mailview
     image_templates:
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-amd64"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:latest-amd64"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:{{ .Tag }}-amd64"
     build_flag_templates:
@@ -79,8 +76,6 @@ dockers:
     ids:
       - mailview
     image_templates:
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-arm64v8"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-arm64v8"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:latest-arm64v8"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:{{ .Tag }}-arm64v8"
     build_flag_templates:
@@ -104,8 +99,6 @@ dockers:
     ids:
       - mailview
     image_templates:
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-armv6"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-armv6"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:latest-armv6"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:{{ .Tag }}-armv6"
     build_flag_templates:
@@ -129,8 +122,6 @@ dockers:
     ids:
       - mailview
     image_templates:
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-armv7"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-armv7"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:latest-armv7"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:{{ .Tag }}-armv7"
     build_flag_templates:
@@ -149,18 +140,6 @@ dockers:
       - docker-entrypoint.sh
 
 docker_manifests:
-  - name_template: "{{ .Env.DOCKER_ORG }}/mailview:latest"
-    image_templates:
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-amd64"
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-arm64v8"
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-armv6"
-      - "{{ .Env.DOCKER_ORG }}/mailview:latest-armv7"
-  - name_template: "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}"
-    image_templates:
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-amd64"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-arm64v8"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-armv6"
-      - "{{ .Env.DOCKER_ORG }}/mailview:{{ .Tag }}-armv7"
   - name_template: ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:latest
     image_templates:
       - ghcr.io/{{ .Env.GITHUB_ORG }}/mailview:latest-amd64

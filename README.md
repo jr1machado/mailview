@@ -88,7 +88,7 @@ O Compose local publica `10443:9000` e, apenas em loopback, `15432:5432`. Portas
 
 ## Requisitos
 
-Software de build: Go 1.26.1, Node.js 22, Yarn 1.22 e Docker/Compose v2. Runtime: Linux containerizado ou SO suportado pelo Go, PostgreSQL 17 recomendado e acesso a um relay SMTP ou mensageiro HTTP.
+Software de build: Go 1.26.5, Node.js 22, Yarn 1.22 e Docker/Compose v2. Runtime: Linux containerizado ou SO suportado pelo Go, PostgreSQL 17 recomendado e acesso a um relay SMTP ou mensageiro HTTP.
 
 Referência inicial de capacidade — não é benchmark nem SLA:
 

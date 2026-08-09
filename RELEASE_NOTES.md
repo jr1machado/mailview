@@ -32,8 +32,9 @@ Release que conclui o isolamento multi-tenant da Sprint/Fase 2 e consolida as fu
 ### Produto, build e operação
 
 - binário renomeado para `mailview` e frontend package `mailview` 0.4.0;
-- arquivos GoReleaser `MailView_0.4.0_<os>_<arch>.tar.gz` e imagens `jr1machado/mailview`/`ghcr.io/jr1machado/mailview`;
+- arquivos GoReleaser `MailView_0.4.0_<os>_<arch>.tar.gz` e imagens `ghcr.io/jr1machado/mailview`;
 - workflow acionado por `mailview-v*`;
+- Go 1.26.5 e dependências `goldmark`, `x/text` e `x/image` atualizadas para corrigir os achados alcançáveis do `govulncheck`;
 - imagem não-root em `/mailview` e Compose local com container/rede MailView;
 - Compose de produção executável e fiel à arquitetura: Caddy + aplicação monolítica + PostgreSQL, sem Redis ou serviços placeholders;
 - documentação completa de arquitetura, recursos, API, integrações, requisitos, portas, operação e visão comercial.

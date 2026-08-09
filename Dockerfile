@@ -24,7 +24,7 @@ RUN cd frontend && yarn build
 
 # --- backend: compiles the Go binary and packs every static asset
 # (frontend/dist, SQL, i18n, ...) into it with stuffbin, same as `make dist`. ---
-FROM golang:1.26 AS backend
+FROM golang:1.26.5 AS backend
 WORKDIR /src
 
 RUN go install github.com/knadh/stuffbin/...@latest
