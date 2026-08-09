@@ -4,7 +4,7 @@ Plataforma self-hosted de campanhas, listas e comunicação por e-mail com isola
 
 > **Fork independente.** MailView nasceu do código aberto do [listmonk](https://github.com/knadh/listmonk), sob AGPL-3.0, mas possui mantenedor, roadmap, releases, arquitetura SaaS e identidade próprios. Este repositório não é afiliado nem representa o projeto upstream. O caminho do módulo Go `github.com/knadh/listmonk` e o prefixo de configuração `LISTMONK_*` foram preservados exclusivamente para compatibilidade técnica; binários, pacotes, imagens, tags e releases deste fork usam **MailView**.
 
-Release atual: **MailView v0.4.0** (`mailview-v0.4.0`) — 9 de agosto de 2026.
+Release atual: **MailView v0.4.0** (`v0.4.0`) — 9 de agosto de 2026.
 
 ## Visão comercial
 
@@ -144,10 +144,10 @@ make dist           # ./mailview com SPA/SQL/i18n embarcados
 Convenção desta release:
 
 - binário: `mailview` (`mailview.exe` no Windows);
-- tag Git: `mailview-v0.4.0`;
+- tag Git SemVer: `v0.4.0`;
 - arquivos: `MailView_0.4.0_<sistema>_<arquitetura>.tar.gz`;
-- imagem: `ghcr.io/jr1machado/mailview:mailview-v0.4.0`;
-- título da release: `MailView mailview-v0.4.0`.
+- imagem: `ghcr.io/jr1machado/mailview:v0.4.0`;
+- título da release: `MailView v0.4.0`.
 
 ## Configuração e compatibilidade
 

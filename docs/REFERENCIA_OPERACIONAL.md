@@ -59,4 +59,4 @@ docker compose --env-file deploy/.env.example -f deploy/compose.production.yml c
 
 Testes integrados usam um `MAILVIEW_TEST_DSN` administrativo para migrations/RLS e depois um DSN de aplicação restrita para `control`, `dataplane` e `importjob`. Nunca use banco de produção.
 
-Artefatos: `mailview`, `MailView_<versão>_<os>_<arch>.tar.gz`, imagem `ghcr.io/jr1machado/mailview` e tag `mailview-v<semver>`.
+Artefatos: `mailview`, `MailView_<versão>_<os>_<arch>.tar.gz`, imagem `ghcr.io/jr1machado/mailview` e tag SemVer `v<semver>`.
