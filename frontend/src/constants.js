@@ -20,6 +20,7 @@ export const models = Object.freeze({
   settings: 'settings',
   logs: 'logs',
   maintenance: 'maintenance',
+  mailviewTenants: 'mailviewTenants',
 });
 
 // Ad-hoc URIs that are used outside of vuex requests.

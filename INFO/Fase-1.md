@@ -49,7 +49,7 @@ O arquivo contém somente a chave em base64. Sem ela, novas inscrições TOTP s�
 O processo principal executa migrations MailView pendentes no boot. Em uma atualização operacional, rode também o upgrade normal:
 
 ```sh
-./listmonk --upgrade --yes --config config.toml
+./mailview --upgrade --yes --config config.toml
 ```
 
 ## Limites intencionais

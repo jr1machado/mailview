@@ -113,12 +113,15 @@ type User struct {
 		Permissions []string `db:"-" json:"permissions"`
 	} `db:"-" json:"user_role"`
 
-	ListRole           *ListRolePermissions        `db:"-" json:"list_role"`
-	PermissionsMap     map[string]struct{}         `db:"-" json:"-"`
-	ListPermissionsMap map[int]map[string]struct{} `db:"-" json:"-"`
-	GetListIDs         []int                       `db:"-" json:"-"`
-	ManageListIDs      []int                       `db:"-" json:"-"`
-	HasPassword        bool                        `db:"-" json:"-"`
+	ListRole                    *ListRolePermissions        `db:"-" json:"list_role"`
+	PermissionsMap              map[string]struct{}         `db:"-" json:"-"`
+	ListPermissionsMap          map[int]map[string]struct{} `db:"-" json:"-"`
+	GetListIDs                  []int                       `db:"-" json:"-"`
+	ManageListIDs               []int                       `db:"-" json:"-"`
+	HasPassword                 bool                        `db:"-" json:"-"`
+	MailViewTenantID            string                      `db:"-" json:"mailview_tenant_id,omitempty"`
+	MailViewPermissions         []string                    `db:"-" json:"mailview_permissions,omitempty"`
+	MailViewPlatformPermissions []string                    `db:"-" json:"mailview_platform_permissions,omitempty"`
 }
 
 type ListPermission struct {

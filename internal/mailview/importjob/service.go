@@ -30,6 +30,7 @@ var (
 	ErrInvalid            = errors.New("invalid import job input")
 	ErrNotFound           = errors.New("import job not found")
 	ErrSigningUnavailable = errors.New("import signing key is not configured")
+	errJobCancelled       = errors.New("import job cancelled")
 
 	batchSize = 500
 )
@@ -240,20 +241,23 @@ func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID) error {
 		return err
 	}
 
-	total, imported, errored, procErr := s.importRows(ctx, data, listIDs)
+	total, imported, errored, procErr := s.importRows(ctx, jobID, data, listIDs)
 	if procErr != nil {
+		if errors.Is(procErr, errJobCancelled) {
+			return nil
+		}
 		s.fail(ctx, jobID, procErr)
 		return procErr
 	}
 
 	return tenant.InTransaction(ctx, s.db, func(tx *sqlx.Tx, scope tenant.Context) error {
-		_, err := tx.ExecContext(ctx, `UPDATE mv_import_jobs SET status='completed', total_rows=$3, processed_rows=$3, imported_rows=$4, error_rows=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`,
+		_, err := tx.ExecContext(ctx, `UPDATE mv_import_jobs SET status='completed', total_rows=$3, processed_rows=$3, imported_rows=$4, error_rows=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='processing'`,
 			scope.TenantID, jobID, total, imported, errored)
 		return err
 	})
 }
 
-func (s *Service) importRows(ctx context.Context, data []byte, listIDs []int64) (total, imported, errored int, err error) {
+func (s *Service) importRows(ctx context.Context, jobID uuid.UUID, data []byte, listIDs []int64) (total, imported, errored int, err error) {
 	r := csv.NewReader(bytes.NewReader(data))
 	header, err := r.Read()
 	if err != nil {
@@ -277,9 +281,10 @@ func (s *Service) importRows(ctx context.Context, data []byte, listIDs []int64) 
 		if len(batch) == 0 {
 			return nil
 		}
-		n, e := s.importBatch(ctx, batch, listIDs)
+		batchLen := len(batch)
+		n, e := s.importBatch(ctx, jobID, batch, listIDs)
 		imported += n
-		errored += len(batch) - n
+		errored += batchLen - n
 		batch = batch[:0]
 		return e
 	}
@@ -314,8 +319,18 @@ func (s *Service) importRows(ctx context.Context, data []byte, listIDs []int64) 
 	return total, imported, errored, nil
 }
 
-func (s *Service) importBatch(ctx context.Context, rows [][2]string, listIDs []int64) (imported int, err error) {
+func (s *Service) importBatch(ctx context.Context, jobID uuid.UUID, rows [][2]string, listIDs []int64) (imported int, err error) {
 	err = tenant.InTransaction(ctx, s.db, func(tx *sqlx.Tx, scope tenant.Context) error {
+		var status string
+		if err := tx.GetContext(ctx, &status, `SELECT status FROM mv_import_jobs WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, scope.TenantID, jobID); err != nil {
+			return err
+		}
+		if status == StatusCancelled {
+			return errJobCancelled
+		}
+		if status != StatusProcessing {
+			return fmt.Errorf("%w: job is not processing", ErrInvalid)
+		}
 		for _, row := range rows {
 			email, name := row[0], row[1]
 			if !strings.Contains(email, "@") {
@@ -336,7 +351,9 @@ RETURNING id`, scope.TenantID, uuid.Must(uuid.NewV4()), strings.ToLower(email), 
 			}
 			imported++
 		}
-		return nil
+		_, err := tx.ExecContext(ctx, `UPDATE mv_import_jobs SET processed_rows=processed_rows+$3, imported_rows=imported_rows+$4, error_rows=error_rows+$5, updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='processing'`,
+			scope.TenantID, jobID, len(rows), imported, len(rows)-imported)
+		return err
 	})
 	return imported, err
 }

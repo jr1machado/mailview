@@ -1,14 +1,24 @@
-# Deploy de produção
+# Deploy de produção do MailView v0.4.0
 
-Copie `.env.example` para `.env`, substitua apenas as referências de imagem pelos artefatos imutáveis publicados pelo pipeline e crie os arquivos em `secrets/` fora do Git.
+A topologia fornecida executa Caddy (80/443), o binário monolítico MailView (9000 interno) e PostgreSQL (5432 interno). Frontend e workers estão no binário; não há Redis.
 
 ```sh
-cd deploy
 cp .env.example .env
-mkdir -p secrets
-chmod 700 secrets
+mkdir -p secrets && chmod 700 secrets
+printf '%s' 'mailview_admin' > secrets/postgres-user
+openssl rand -base64 36 > secrets/postgres-password
+openssl rand -base64 36 > secrets/app-db-password
+openssl rand -base64 32 > secrets/mfa-encryption-key
+openssl rand -base64 32 > secrets/import-signing-key
+chmod 600 secrets/*
 docker compose --env-file .env -f compose.production.yml config
 docker compose --env-file .env -f compose.production.yml up -d
 ```
 
-O Compose é uma topologia de segurança para a Fase 0; `frontend`, `api` e `worker` serão disponibilizados pelas fases seguintes. Não reutilize o `docker-compose.yml` da raiz em produção: ele é o exemplo de desenvolvimento herdado do Listmonk.
+Edite `.env`: `MAILVIEW_IMAGE` deve ser imagem MailView com tag imutável e `MAILVIEW_PUBLIC_HOST` deve possuir DNS apontando para o proxy. O Caddy emite TLS do host principal. Domínios de tenant adicionais exigem configuração operacional de DNS/proxy; a verificação do app é manual nesta versão.
+
+Na primeira criação do volume, `db-init/02-mailview-app-role.sh` cria `mailview_app` como `NOBYPASSRLS`. Alterar secrets depois não executa novamente o init; rotacione a senha também no PostgreSQL.
+
+Configure em Settings o provider de mídia como filesystem `/mailview/uploads` ou S3. Faça backup dos volumes `postgres-data`, `media-data`, `import-data` e `caddy-data`. O Compose é baseline de segurança, não HA.
+
+O prefixo `LISTMONK_*` dentro do Compose é compatibilidade do loader, não nome de pacote ou release.

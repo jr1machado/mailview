@@ -47,6 +47,7 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 			AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
 		}))
 	}
+	e.Use(a.blockGlobalAPIsOnTenantHost)
 
 	// =================================================================
 	// Authenticated non /api handlers.
@@ -102,8 +103,8 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		g.GET("/api/health", a.HealthCheck)
 		g.GET("/api/config", a.GetServerConfig)
 		g.GET("/api/lang/:lang", a.GetI18nLang)
-		g.GET("/api/dashboard/charts", a.GetDashboardCharts)
-		g.GET("/api/dashboard/counts", a.GetDashboardCounts)
+		g.GET("/api/dashboard/charts", a.mailviewDataPerm(a.GetDashboardCharts, "analytics.read.tenant"))
+		g.GET("/api/dashboard/counts", a.mailviewDataPerm(a.GetDashboardCounts, "analytics.read.tenant"))
 
 		g.GET("/api/settings", pm(a.GetSettings, "settings:get"))
 		g.PUT("/api/settings", pm(a.UpdateSettings, "settings:manage"))
@@ -114,80 +115,84 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		g.GET("/api/events", pm(a.EventStream, "settings:get"))
 		g.GET("/api/about", a.GetAboutInfo)
 
-		g.GET("/api/subscribers", pm(a.QuerySubscribers, "subscribers:get_all", "subscribers:get"))
-		g.GET("/api/subscribers/:id", pm(hasID(a.GetSubscriber), "subscribers:get_all", "subscribers:get"))
-		g.GET("/api/subscribers/:id/activity", pm(hasID(a.GetSubscriberActivity), "subscribers:get_all", "subscribers:get"))
-		g.GET("/api/subscribers/:id/export", pm(hasID(a.ExportSubscriberData), "subscribers:get_all", "subscribers:get"))
-		g.GET("/api/subscribers/:id/bounces", pm(hasID(a.GetSubscriberBounces), "bounces:get"))
-		g.DELETE("/api/subscribers/:id/bounces", pm(hasID(a.DeleteSubscriberBounces), "bounces:manage"))
-		g.POST("/api/subscribers", pm(a.CreateSubscriber, "subscribers:manage"))
-		g.PUT("/api/subscribers/:id", pm(hasID(a.UpdateSubscriber), "subscribers:manage"))
-		g.PATCH("/api/subscribers/:id", pm(hasID(a.PatchSubscriber), "subscribers:manage"))
-		g.POST("/api/subscribers/:id/optin", pm(hasID(a.SubscriberSendOptin), "subscribers:manage"))
-		g.PUT("/api/subscribers/blocklist", pm(a.BlocklistSubscribers, "subscribers:manage"))
-		g.PUT("/api/subscribers/:id/blocklist", pm(hasID(a.BlocklistSubscriber), "subscribers:manage"))
-		g.PUT("/api/subscribers/lists/:id", pm(a.ManageSubscriberLists, "subscribers:manage"))
-		g.PUT("/api/subscribers/lists", pm(a.ManageSubscriberLists, "subscribers:manage"))
-		g.DELETE("/api/subscribers/:id", pm(hasID(a.DeleteSubscriber), "subscribers:manage"))
-		g.DELETE("/api/subscribers", pm(a.DeleteSubscribers, "subscribers:manage"))
+		g.GET("/api/subscribers", a.mailviewDataPerm(a.QuerySubscribers, "subscriber.read.tenant", "subscribers:get_all", "subscribers:get"))
+		g.GET("/api/subscribers/:id", a.mailviewDataPerm(hasID(a.GetSubscriber), "subscriber.read.tenant", "subscribers:get_all", "subscribers:get"))
+		g.GET("/api/subscribers/:id/activity", a.mailviewDataPerm(hasID(a.GetSubscriberActivity), "analytics.read.tenant", "subscribers:get_all", "subscribers:get"))
+		g.GET("/api/subscribers/:id/export", a.mailviewDataPerm(hasID(a.ExportSubscriberData), "subscriber.export.tenant", "subscribers:get_all", "subscribers:get"))
+		g.GET("/api/subscribers/:id/bounces", a.mailviewDataPerm(hasID(a.GetSubscriberBounces), "bounce.read.tenant", "bounces:get"))
+		g.DELETE("/api/subscribers/:id/bounces", a.mailviewDataPerm(hasID(a.DeleteSubscriberBounces), "bounce.manage.tenant", "bounces:manage"))
+		g.POST("/api/subscribers", a.mailviewDataPerm(a.CreateSubscriber, "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/:id", a.mailviewDataPerm(hasID(a.UpdateSubscriber), "subscriber.manage.tenant", "subscribers:manage"))
+		g.PATCH("/api/subscribers/:id", a.mailviewDataPerm(hasID(a.PatchSubscriber), "subscriber.manage.tenant", "subscribers:manage"))
+		g.POST("/api/subscribers/:id/optin", a.mailviewDataPerm(hasID(a.SubscriberSendOptin), "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/blocklist", a.mailviewDataPerm(a.BlocklistSubscribers, "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/:id/blocklist", a.mailviewDataPerm(hasID(a.BlocklistSubscriber), "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/lists/:id", a.mailviewDataPerm(a.ManageSubscriberLists, "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/lists", a.mailviewDataPerm(a.ManageSubscriberLists, "subscriber.manage.tenant", "subscribers:manage"))
+		g.DELETE("/api/subscribers/:id", a.mailviewDataPerm(hasID(a.DeleteSubscriber), "subscriber.manage.tenant", "subscribers:manage"))
+		g.DELETE("/api/subscribers", a.mailviewDataPerm(a.DeleteSubscribers, "subscriber.manage.tenant", "subscribers:manage"))
 
-		g.GET("/api/bounces", pm(a.GetBounces, "bounces:get"))
-		g.PUT("/api/bounces/blocklist", pm(a.BlocklistBouncedSubscribers, "bounces:manage"))
-		g.GET("/api/bounces/:id", pm(hasID(a.GetBounce), "bounces:get"))
-		g.DELETE("/api/bounces", pm(a.DeleteBounces, "bounces:manage"))
-		g.DELETE("/api/bounces/:id", pm(hasID(a.DeleteBounce), "bounces:manage"))
+		g.GET("/api/bounces", a.mailviewDataPerm(a.GetBounces, "bounce.read.tenant", "bounces:get"))
+		g.PUT("/api/bounces/blocklist", a.mailviewDataPerm(a.BlocklistBouncedSubscribers, "bounce.manage.tenant", "bounces:manage"))
+		g.GET("/api/bounces/:id", a.mailviewDataPerm(hasID(a.GetBounce), "bounce.read.tenant", "bounces:get"))
+		g.DELETE("/api/bounces", a.mailviewDataPerm(a.DeleteBounces, "bounce.manage.tenant", "bounces:manage"))
+		g.DELETE("/api/bounces/:id", a.mailviewDataPerm(hasID(a.DeleteBounce), "bounce.manage.tenant", "bounces:manage"))
 
 		// Subscriber operations based on arbitrary SQL queries.
 		// These aren't very REST-like.
-		g.POST("/api/subscribers/query/delete", pm(a.DeleteSubscribersByQuery, "subscribers:manage"))
-		g.PUT("/api/subscribers/query/blocklist", pm(a.BlocklistSubscribersByQuery, "subscribers:manage"))
-		g.PUT("/api/subscribers/query/lists", pm(a.ManageSubscriberListsByQuery, "subscribers:manage"))
+		g.POST("/api/subscribers/query/delete", a.mailviewDataPerm(a.DeleteSubscribersByQuery, "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/query/blocklist", a.mailviewDataPerm(a.BlocklistSubscribersByQuery, "subscriber.manage.tenant", "subscribers:manage"))
+		g.PUT("/api/subscribers/query/lists", a.mailviewDataPerm(a.ManageSubscriberListsByQuery, "subscriber.manage.tenant", "subscribers:manage"))
 		g.GET("/api/subscribers/export",
-			pm(middleware.GzipWithConfig(middleware.GzipConfig{Level: 9})(a.ExportSubscribers), "subscribers:get_all", "subscribers:get"))
+			a.mailviewDataPerm(middleware.GzipWithConfig(middleware.GzipConfig{Level: 9})(a.ExportSubscribers), "subscriber.export.tenant", "subscribers:get_all", "subscribers:get"))
 
-		g.GET("/api/import/subscribers", pm(a.GetImportSubscribers, "subscribers:import"))
-		g.GET("/api/import/subscribers/logs", pm(a.GetImportSubscriberStats, "subscribers:import"))
-		g.POST("/api/import/subscribers", pm(a.ImportSubscribers, "subscribers:import"))
-		g.DELETE("/api/import/subscribers", pm(a.StopImportSubscribers, "subscribers:import"))
+		g.GET("/api/import/subscribers", a.mailviewDataPerm(a.GetImportSubscribers, "subscriber.import.tenant", "subscribers:import"))
+		g.GET("/api/import/subscribers/logs", a.mailviewDataPerm(a.GetImportSubscriberStats, "subscriber.import.tenant", "subscribers:import"))
+		g.POST("/api/import/subscribers", a.mailviewDataPerm(a.ImportSubscribers, "subscriber.import.tenant", "subscribers:import"))
+		g.DELETE("/api/import/subscribers", a.mailviewDataPerm(a.StopImportSubscribers, "subscriber.import.tenant", "subscribers:import"))
+		g.GET("/api/mailview/data/import-jobs", a.mailviewDataPerm(a.ListMailViewImportJobs, "subscriber.import.tenant"))
+		g.POST("/api/mailview/data/import-jobs", a.mailviewDataPerm(a.CreateMailViewImportJob, "subscriber.import.tenant"))
+		g.GET("/api/mailview/data/import-jobs/:jobID", a.mailviewDataPerm(a.GetMailViewImportJob, "subscriber.import.tenant"))
+		g.POST("/api/mailview/data/import-jobs/:jobID/cancel", a.mailviewDataPerm(a.CancelMailViewImportJob, "subscriber.import.tenant"))
 
 		// Individual list permissions are applied directly within handleGetLists.
-		g.GET("/api/lists", a.GetLists)
-		g.GET("/api/lists/:id", hasID(a.GetList))
-		g.POST("/api/lists", pm(a.CreateList, "lists:manage_all"))
-		g.PUT("/api/lists/:id", hasID(a.UpdateList))
-		g.DELETE("/api/lists", a.DeleteLists)
-		g.DELETE("/api/lists/:id", hasID(a.DeleteList))
+		g.GET("/api/lists", a.mailviewDataPerm(a.GetLists, "list.read.tenant"))
+		g.GET("/api/lists/:id", a.mailviewDataPerm(hasID(a.GetList), "list.read.tenant"))
+		g.POST("/api/lists", a.mailviewDataPerm(a.CreateList, "list.manage.tenant", "lists:manage_all"))
+		g.PUT("/api/lists/:id", a.mailviewDataPerm(hasID(a.UpdateList), "list.manage.tenant"))
+		g.DELETE("/api/lists", a.mailviewDataPerm(a.DeleteLists, "list.manage.tenant"))
+		g.DELETE("/api/lists/:id", a.mailviewDataPerm(hasID(a.DeleteList), "list.manage.tenant"))
 
-		g.GET("/api/campaigns", pm(a.GetCampaigns, "campaigns:get_all", "campaigns:get"))
-		g.GET("/api/campaigns/running/stats", pm(a.GetRunningCampaignStats, "campaigns:get_all", "campaigns:get"))
-		g.GET("/api/campaigns/:id", pm(hasID(a.GetCampaign), "campaigns:get_all", "campaigns:get"))
-		g.GET("/api/campaigns/analytics/:type", pm(a.GetCampaignViewAnalytics, "campaigns:get_analytics"))
-		g.GET("/api/campaigns/:id/preview", pm(hasID(a.PreviewCampaign), "campaigns:get_all", "campaigns:get"))
-		g.POST("/api/campaigns/:id/preview/archive", pm(hasID(a.PreviewCampaignArchive), "campaigns:get_all", "campaigns:get"))
-		g.POST("/api/campaigns/:id/preview", pm(hasID(a.PreviewCampaign), "campaigns:get_all", "campaigns:get"))
-		g.POST("/api/campaigns/:id/content", pm(hasID(a.CampaignContent), "campaigns:manage_all", "campaigns:manage"))
-		g.POST("/api/campaigns/:id/text", pm(hasID(a.PreviewCampaign), "campaigns:get"))
-		g.POST("/api/campaigns/:id/test", pm(hasID(a.TestCampaign), "campaigns:manage_all", "campaigns:manage"))
-		g.POST("/api/campaigns", pm(a.CreateCampaign, "campaigns:manage_all", "campaigns:manage"))
-		g.PUT("/api/campaigns/:id", pm(hasID(a.UpdateCampaign), "campaigns:manage_all", "campaigns:manage"))
-		g.PUT("/api/campaigns/:id/status", pm(hasID(a.UpdateCampaignStatus), "campaigns:send"))
-		g.PUT("/api/campaigns/:id/archive", pm(hasID(a.UpdateCampaignArchive), "campaigns:manage_all", "campaigns:manage"))
-		g.DELETE("/api/campaigns", pm(a.DeleteCampaigns, "campaigns:manage", "campaigns:manage_all"))
-		g.DELETE("/api/campaigns/:id", pm(hasID(a.DeleteCampaign), "campaigns:manage_all", "campaigns:manage"))
+		g.GET("/api/campaigns", a.mailviewDataPerm(a.GetCampaigns, "campaign.read.tenant", "campaigns:get_all", "campaigns:get"))
+		g.GET("/api/campaigns/running/stats", a.mailviewDataPerm(a.GetRunningCampaignStats, "campaign.read.tenant", "campaigns:get_all", "campaigns:get"))
+		g.GET("/api/campaigns/:id", a.mailviewDataPerm(hasID(a.GetCampaign), "campaign.read.tenant", "campaigns:get_all", "campaigns:get"))
+		g.GET("/api/campaigns/analytics/:type", a.mailviewDataPerm(a.GetCampaignViewAnalytics, "analytics.read.tenant", "campaigns:get_analytics"))
+		g.GET("/api/campaigns/:id/preview", a.mailviewDataPerm(hasID(a.PreviewCampaign), "campaign.read.tenant", "campaigns:get_all", "campaigns:get"))
+		g.POST("/api/campaigns/:id/preview/archive", a.mailviewDataPerm(hasID(a.PreviewCampaignArchive), "campaign.read.tenant", "campaigns:get_all", "campaigns:get"))
+		g.POST("/api/campaigns/:id/preview", a.mailviewDataPerm(hasID(a.PreviewCampaign), "campaign.read.tenant", "campaigns:get_all", "campaigns:get"))
+		g.POST("/api/campaigns/:id/content", a.mailviewDataPerm(hasID(a.CampaignContent), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
+		g.POST("/api/campaigns/:id/text", a.mailviewDataPerm(hasID(a.PreviewCampaign), "campaign.read.tenant", "campaigns:get"))
+		g.POST("/api/campaigns/:id/test", a.mailviewDataPerm(hasID(a.TestCampaign), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
+		g.POST("/api/campaigns", a.mailviewDataPerm(a.CreateCampaign, "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
+		g.PUT("/api/campaigns/:id", a.mailviewDataPerm(hasID(a.UpdateCampaign), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
+		g.PUT("/api/campaigns/:id/status", a.mailviewDataPerm(hasID(a.UpdateCampaignStatus), "campaign.send.tenant", "campaigns:send"))
+		g.PUT("/api/campaigns/:id/archive", a.mailviewDataPerm(hasID(a.UpdateCampaignArchive), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
+		g.DELETE("/api/campaigns", a.mailviewDataPerm(a.DeleteCampaigns, "campaign.manage.tenant", "campaigns:manage", "campaigns:manage_all"))
+		g.DELETE("/api/campaigns/:id", a.mailviewDataPerm(hasID(a.DeleteCampaign), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
 
-		g.GET("/api/media", pm(a.GetAllMedia, "media:get"))
-		g.GET("/api/media/:id", pm(hasID(a.GetMedia), "media:get"))
-		g.POST("/api/media", pm(a.UploadMedia, "media:manage"))
-		g.DELETE("/api/media/:id", pm(hasID(a.DeleteMedia), "media:manage"))
+		g.GET("/api/media", a.mailviewDataPerm(a.GetAllMedia, "media.read.tenant", "media:get"))
+		g.GET("/api/media/:id", a.mailviewDataPerm(hasID(a.GetMedia), "media.read.tenant", "media:get"))
+		g.POST("/api/media", a.mailviewDataPerm(a.UploadMedia, "media.manage.tenant", "media:manage"))
+		g.DELETE("/api/media/:id", a.mailviewDataPerm(hasID(a.DeleteMedia), "media.manage.tenant", "media:manage"))
 
-		g.GET("/api/templates", pm(a.GetTemplates, "templates:get"))
-		g.GET("/api/templates/:id", pm(hasID(a.GetTemplate), "templates:get"))
-		g.GET("/api/templates/:id/preview", pm(hasID(a.PreviewTemplate), "templates:get"))
-		g.POST("/api/templates/preview", pm(a.PreviewTemplateBody, "templates:get"))
-		g.POST("/api/templates", pm(a.CreateTemplate, "templates:manage"))
-		g.PUT("/api/templates/:id", pm(hasID(a.UpdateTemplate), "templates:manage"))
-		g.PUT("/api/templates/:id/default", pm(hasID(a.TemplateSetDefault), "templates:manage"))
-		g.DELETE("/api/templates/:id", pm(hasID(a.DeleteTemplate), "templates:manage"))
+		g.GET("/api/templates", a.mailviewDataPerm(a.GetTemplates, "template.read.tenant", "templates:get"))
+		g.GET("/api/templates/:id", a.mailviewDataPerm(hasID(a.GetTemplate), "template.read.tenant", "templates:get"))
+		g.GET("/api/templates/:id/preview", a.mailviewDataPerm(hasID(a.PreviewTemplate), "template.read.tenant", "templates:get"))
+		g.POST("/api/templates/preview", a.mailviewDataPerm(a.PreviewTemplateBody, "template.read.tenant", "templates:get"))
+		g.POST("/api/templates", a.mailviewDataPerm(a.CreateTemplate, "template.manage.tenant", "templates:manage"))
+		g.PUT("/api/templates/:id", a.mailviewDataPerm(hasID(a.UpdateTemplate), "template.manage.tenant", "templates:manage"))
+		g.PUT("/api/templates/:id/default", a.mailviewDataPerm(hasID(a.TemplateSetDefault), "template.manage.tenant", "templates:manage"))
+		g.DELETE("/api/templates/:id", a.mailviewDataPerm(hasID(a.DeleteTemplate), "template.manage.tenant", "templates:manage"))
 
 		g.DELETE("/api/maintenance/subscribers/:type", pm(a.GCSubscribers, "settings:maintain"))
 		g.DELETE("/api/maintenance/analytics/:type", pm(a.GCCampaignAnalytics, "settings:maintain"))
@@ -219,8 +224,8 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		g.PUT("/api/roles/lists/:id", pm(hasID(a.UpdateListRole), "roles:manage"))
 		g.DELETE("/api/roles/:id", pm(hasID(a.DeleteRole), "roles:manage"))
 
-		// MailView Control Plane. These endpoints are intentionally limited to
-		// the existing platform Super Admin until platform RBAC is activated.
+		// MailView Control Plane. Endpoints accept the legacy platform Super
+		// Admin or a user holding the matching MailView platform role.
 		cp := g.Group("/api/mailview", a.requirePlatformAdmin)
 		cp.GET("/tenants", a.ListMailViewTenants)
 		cp.POST("/tenants", a.CreateMailViewTenant)
@@ -239,6 +244,37 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		cp.POST("/tenants/:tenantID/data/import-jobs", a.CreateMailViewImportJob)
 		cp.GET("/tenants/:tenantID/data/import-jobs/:jobID", a.GetMailViewImportJob)
 		cp.POST("/tenants/:tenantID/data/import-jobs/:jobID/cancel", a.CancelMailViewImportJob)
+
+		cp.GET("/tenants/:tenantID/domains", a.ListMailViewTenantDomains)
+		cp.POST("/tenants/:tenantID/domains", a.CreateMailViewTenantDomain)
+		cp.POST("/tenants/:tenantID/domains/:domainID/verify", a.VerifyMailViewTenantDomain)
+		cp.POST("/tenants/:tenantID/domains/:domainID/revoke", a.RevokeMailViewTenantDomain)
+		cp.GET("/tenants/:tenantID/quota", a.GetMailViewTenantQuota)
+		cp.PUT("/tenants/:tenantID/quota", a.SetMailViewTenantQuotaPlan)
+		cp.GET("/plans", a.ListMailViewTenantPlans)
+		cp.GET("/dashboard", a.GetMailViewDashboard)
+		cp.POST("/tenants/:tenantID/owner", a.ResetMailViewTenantOwner)
+		cp.POST("/tenants/:tenantID/infrastructure", a.SetMailViewTenantInfrastructure)
+		cp.POST("/tenants/:tenantID/roles", a.CreateMailViewTenantRole)
+		cp.POST("/tenants/:tenantID/roles/:roleID/permissions/:code/deny", a.DenyMailViewRolePermission)
+		cp.DELETE("/tenants/:tenantID/roles/:roleID/permissions/:code/deny", a.AllowMailViewRolePermission)
+
+		// Platform role assignment is gated by platform.roles.manage, a
+		// narrower permission than tenant.manage.platform: an Operations
+		// role holder can manage tenants but cannot grant itself Super Admin.
+		cpRoles := g.Group("/api/mailview/platform", a.requirePlatformRoleAdmin)
+		cpRoles.GET("/roles", a.ListMailViewPlatformRoles)
+		cpRoles.GET("/assignments", a.ListMailViewPlatformAssignments)
+		cpRoles.POST("/assignments", a.AssignMailViewPlatformRole)
+		cpRoles.DELETE("/assignments/:userID/:roleID", a.RevokeMailViewPlatformRole)
+
+		// Impersonation is gated by support.impersonate.platform, narrower
+		// still: an Operations/Billing role holder cannot act as a tenant
+		// member even though they can manage tenants.
+		cpImpersonation := g.Group("/api/mailview/platform/impersonation", a.requireImpersonationAdmin)
+		cpImpersonation.POST("", a.StartMailViewImpersonation)
+		cpImpersonation.GET("", a.ListMailViewImpersonationGrants)
+		cpImpersonation.POST("/:grantID/revoke", a.RevokeMailViewImpersonation)
 
 		// Available to any authenticated user with TOTP enabled. Codes are
 		// displayed only in this response and persisted as bcrypt hashes.
@@ -282,32 +318,32 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		}
 
 		// Public APIs.
-		g.GET("/api/public/lists", a.GetPublicLists)
-		g.POST("/api/public/subscription", a.PublicSubscription)
+		g.GET("/api/public/lists", a.mailviewPublicTenant(a.GetPublicLists))
+		g.POST("/api/public/subscription", a.mailviewPublicTenant(a.PublicSubscription))
 		g.GET("/api/public/captcha/altcha", a.AltchaChallenge)
 		if a.cfg.EnablePublicArchive {
-			g.GET("/api/public/archive", a.GetCampaignArchives)
+			g.GET("/api/public/archive", a.mailviewPublicTenant(a.GetCampaignArchives))
 		}
 
 		// /public/static/* file server is registered in initHTTPServer().
 		// Public subscriber facing views.
-		g.GET("/subscription/form", a.SubscriptionFormPage)
-		g.POST("/subscription/form", a.SubscriptionForm)
-		g.GET("/subscription/:campUUID/:subUUID", noIndex(a.hasUUID(a.hasSub(a.SubscriptionPage), "campUUID", "subUUID")))
-		g.POST("/subscription/:campUUID/:subUUID", a.hasUUID(a.hasSub(a.SubscriptionPrefs), "campUUID", "subUUID"))
-		g.GET("/subscription/optin/:subUUID", noIndex(a.hasUUID(a.hasSub(a.OptinPage), "subUUID")))
-		g.POST("/subscription/optin/:subUUID", a.hasUUID(a.hasSub(a.OptinPage), "subUUID"))
-		g.POST("/subscription/export/:subUUID", a.hasUUID(a.hasSub(a.SelfExportSubscriberData), "subUUID"))
-		g.POST("/subscription/wipe/:subUUID", a.hasUUID(a.hasSub(a.WipeSubscriberData), "subUUID"))
-		g.GET("/link/:linkUUID/:campUUID/:subUUID", noIndex(a.hasUUID(a.LinkRedirect, "linkUUID", "campUUID", "subUUID")))
-		g.GET("/campaign/:campUUID/:subUUID", noIndex(a.hasUUID(a.ViewCampaignMessage, "campUUID", "subUUID")))
-		g.GET("/campaign/:campUUID/:subUUID/px.png", noIndex(a.hasUUID(a.RegisterCampaignView, "campUUID", "subUUID")))
+		g.GET("/subscription/form", a.mailviewPublicTenant(a.SubscriptionFormPage))
+		g.POST("/subscription/form", a.mailviewPublicTenant(a.SubscriptionForm))
+		g.GET("/subscription/:campUUID/:subUUID", a.mailviewPublicTenant(noIndex(a.hasUUID(a.hasSub(a.SubscriptionPage), "campUUID", "subUUID"))))
+		g.POST("/subscription/:campUUID/:subUUID", a.mailviewPublicTenant(a.hasUUID(a.hasSub(a.SubscriptionPrefs), "campUUID", "subUUID")))
+		g.GET("/subscription/optin/:subUUID", a.mailviewPublicTenant(noIndex(a.hasUUID(a.hasSub(a.OptinPage), "subUUID"))))
+		g.POST("/subscription/optin/:subUUID", a.mailviewPublicTenant(a.hasUUID(a.hasSub(a.OptinPage), "subUUID")))
+		g.POST("/subscription/export/:subUUID", a.mailviewPublicTenant(a.hasUUID(a.hasSub(a.SelfExportSubscriberData), "subUUID")))
+		g.POST("/subscription/wipe/:subUUID", a.mailviewPublicTenant(a.hasUUID(a.hasSub(a.WipeSubscriberData), "subUUID")))
+		g.GET("/link/:linkUUID/:campUUID/:subUUID", a.mailviewPublicTenant(noIndex(a.hasUUID(a.LinkRedirect, "linkUUID", "campUUID", "subUUID"))))
+		g.GET("/campaign/:campUUID/:subUUID", a.mailviewPublicTenant(noIndex(a.hasUUID(a.ViewCampaignMessage, "campUUID", "subUUID"))))
+		g.GET("/campaign/:campUUID/:subUUID/px.png", a.mailviewPublicTenant(noIndex(a.hasUUID(a.RegisterCampaignView, "campUUID", "subUUID"))))
 
 		if a.cfg.EnablePublicArchive {
-			g.GET("/archive", a.CampaignArchivesPage)
-			g.GET("/archive.xml", a.GetCampaignArchivesFeed)
-			g.GET("/archive/:id", a.CampaignArchivePage)
-			g.GET("/archive/latest", a.CampaignArchivePageLatest)
+			g.GET("/archive", a.mailviewPublicTenant(a.CampaignArchivesPage))
+			g.GET("/archive.xml", a.mailviewPublicTenant(a.GetCampaignArchivesFeed))
+			g.GET("/archive/:id", a.mailviewPublicTenant(a.CampaignArchivePage))
+			g.GET("/archive/latest", a.mailviewPublicTenant(a.CampaignArchivePageLatest))
 		}
 
 		g.GET("/public/custom.css", serveCustomAppearance("public.custom_css"))
@@ -422,7 +458,7 @@ func (a *App) hasSub(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		subUUID := c.Param("subUUID")
 
-		if _, err := a.core.GetSubscriber(0, subUUID, ""); err != nil {
+		if _, err := a.mailviewCore(c).GetSubscriber(0, subUUID, ""); err != nil {
 			if er, ok := err.(*echo.HTTPError); ok && er.Code == http.StatusBadRequest {
 				return c.Render(http.StatusNotFound, tplMessage,
 					makeMsgTpl(a.i18n.T("public.notFoundTitle"), "", er.Message.(string)))

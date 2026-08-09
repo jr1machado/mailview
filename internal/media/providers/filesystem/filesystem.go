@@ -3,8 +3,10 @@ package filesystem
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/knadh/listmonk/internal/media"
 )
@@ -33,8 +35,16 @@ func (c *Client) Put(filename string, cType string, src io.ReadSeeker) (string, 
 	// Get the directory path
 	dir := getDir(c.opts.UploadPath)
 
-	// Read the  file contents.
-	out, err := os.OpenFile(filepath.Join(dir, filename), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0664)
+	name, err := c.filenameFromURL(filename)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
+		return "", err
+	}
+	// Read the file contents.
+	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0664)
 	if err != nil {
 		return "", err
 	}
@@ -55,15 +65,41 @@ func (c *Client) GetURL(name string) string {
 
 // GetBlob accepts a URL, reads the file, and returns the blob.
 func (c *Client) GetBlob(url string) ([]byte, error) {
-	b, err := os.ReadFile(filepath.Join(getDir(c.opts.UploadPath), filepath.Base(url)))
+	name, err := c.filenameFromURL(url)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(filepath.Join(getDir(c.opts.UploadPath), name))
 	return b, err
+}
+
+func (c *Client) filenameFromURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	name := parsed.Path
+	uploadURI := "/" + strings.Trim(c.opts.UploadURI, "/")
+	if uploadURI != "/" && (name == uploadURI || strings.HasPrefix(name, uploadURI+"/")) {
+		name = strings.TrimPrefix(name, uploadURI)
+	}
+	name = filepath.Clean(strings.TrimPrefix(name, "/"))
+	if name == "." || name == "" || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) || filepath.IsAbs(name) {
+		return "", fmt.Errorf("invalid media path")
+	}
+
+	return name, nil
 }
 
 // Delete accepts a filename and removes it from disk.
 func (c *Client) Delete(file string) error {
 	dir := getDir(c.opts.UploadPath)
-
-	err := os.Remove(filepath.Join(dir, file))
+	name, err := c.filenameFromURL(file)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(filepath.Join(dir, name))
 	return err
 }
 

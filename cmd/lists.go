@@ -13,7 +13,7 @@ import (
 
 // GetLists retrieves lists with additional metadata like subscriber counts.
 func (a *App) GetLists(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "list.read.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		res, err := a.dataplane.ListLists(scoped)
@@ -83,7 +83,7 @@ func (a *App) GetLists(c echo.Context) error {
 // GetList retrieves a single list by id.
 // It's permission checked by the listPerm middleware.
 func (a *App) GetList(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "list.read.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		out, err := a.dataplane.GetList(scoped, getID(c))
@@ -112,7 +112,7 @@ func (a *App) GetList(c echo.Context) error {
 
 // CreateList handles list creation.
 func (a *App) CreateList(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "list.manage.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		var in dataplane.CreateListInput
@@ -146,7 +146,7 @@ func (a *App) CreateList(c echo.Context) error {
 // UpdateList handles list modification.
 // It's permission checked by the listPerm middleware.
 func (a *App) UpdateList(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "list.manage.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		var in struct {
@@ -193,7 +193,7 @@ func (a *App) UpdateList(c echo.Context) error {
 
 // DeleteList deletes a single list by ID.
 func (a *App) DeleteList(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "list.manage.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		if err := a.dataplane.DeleteList(scoped, getID(c)); err != nil {
@@ -220,6 +220,18 @@ func (a *App) DeleteList(c echo.Context) error {
 
 // DeleteLists deletes multiple lists by IDs or by query.
 func (a *App) DeleteLists(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContextFor(c, "list.manage.tenant"); err != nil {
+		return err
+	} else if scoped != nil {
+		ids, err := parseStringIDs(c.Request().URL.Query()["id"])
+		if err != nil || len(ids) == 0 {
+			return echo.NewHTTPError(http.StatusBadRequest, "one or more list ids are required")
+		}
+		if err := a.dataplane.DeleteLists(scoped, ids); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
 	user := auth.GetUser(c)
 
 	var (

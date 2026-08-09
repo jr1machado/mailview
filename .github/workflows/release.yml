@@ -3,7 +3,7 @@ name: goreleaser
 on:
   push:
     tags:
-      - "v*" # Will trigger only if tag is pushed matching pattern `v*` (Eg: `v0.1.0`)
+      - "v*"
 
 permissions: write-all
 
@@ -22,13 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.1"
-
-      - name: Login to Docker Registry
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          go-version: "1.26.5"
 
       - name: Login to GitHub Docker Registry
         uses: docker/login-action@v3
@@ -48,7 +42,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "~> v2"
           args: release --parallelism 1 --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

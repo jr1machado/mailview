@@ -105,6 +105,14 @@ func (m *MFA) TOTPSecret(ctx context.Context, userID int) (secret string, found 
 	return string(plain), true, nil
 }
 
+// MarkUsed records that userID's TOTP was just successfully verified. Callers
+// that gate on MFA recency (impersonation, in particular) read this instead
+// of trusting session state, since it survives across sessions/devices.
+func (m *MFA) MarkUsed(ctx context.Context, userID int) error {
+	_, err := m.db.ExecContext(ctx, `UPDATE mv_mfa_methods SET last_used_at = now() WHERE user_id = $1 AND type = 'totp'`, userID)
+	return err
+}
+
 func (m *MFA) DisableTOTP(ctx context.Context, userID int, actor Actor) error {
 	if m == nil {
 		return errors.New("MFA service is unavailable")

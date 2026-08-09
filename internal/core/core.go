@@ -6,6 +6,7 @@ package core
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -35,8 +36,46 @@ type Core struct {
 	consts Constants
 	i18n   *i18n.I18n
 	db     *sqlx.DB
+	tx     *sqlx.Tx
 	q      *models.Queries
 	log    *log.Logger
+}
+
+// WithTx returns a request-scoped Core. Every prepared statement and every
+// dynamic query is executed on tx, preserving MailView's SET LOCAL variables.
+func (c *Core) WithTx(tx *sqlx.Tx) *Core {
+	copy := *c
+	copy.tx = tx
+	copy.q = c.q.WithTx(tx)
+	return &copy
+}
+
+func (c *Core) SendOptinConfirmation(sub models.Subscriber, listIDs []int) (int, error) {
+	if c.tx != nil && c.h.SendOptinConfirmationScoped != nil {
+		return c.h.SendOptinConfirmationScoped(c.q, sub, listIDs)
+	}
+	return c.h.SendOptinConfirmation(sub, listIDs)
+}
+
+func (c *Core) selectRows(dest any, query string, args ...any) error {
+	if c.tx != nil {
+		return c.tx.Select(dest, query, args...)
+	}
+	return c.db.Select(dest, query, args...)
+}
+
+func (c *Core) getRow(dest any, query string, args ...any) error {
+	if c.tx != nil {
+		return c.tx.Get(dest, query, args...)
+	}
+	return c.db.Get(dest, query, args...)
+}
+
+func (c *Core) execQuery(query string, args ...any) (sql.Result, error) {
+	if c.tx != nil {
+		return c.tx.Exec(query, args...)
+	}
+	return c.db.Exec(query, args...)
 }
 
 // Constants represents constant config.
@@ -51,7 +90,8 @@ type Constants struct {
 
 // Hooks contains external function hooks that are required by the core package.
 type Hooks struct {
-	SendOptinConfirmation func(models.Subscriber, []int) (int, error)
+	SendOptinConfirmation       func(models.Subscriber, []int) (int, error)
+	SendOptinConfirmationScoped func(*models.Queries, models.Subscriber, []int) (int, error)
 }
 
 // Opt contains the controllers required to start the core.

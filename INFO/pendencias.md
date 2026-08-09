@@ -1,6 +1,6 @@
 # Estado de entrega e pendências
 
-Atualizado em 2026-08-06. Este documento descreve o estado real da branch `feature/sprint01`.
+Atualizado em 2026-08-09. Este documento descreve o estado do diretório de trabalho atual.
 
 ## Entregue
 
@@ -27,6 +27,24 @@ Atualizado em 2026-08-06. Este documento descreve o estado real da branch `featu
 - Resolução opcional de tenant pelo host `{slug}.{tenant_base_domain}` e validação de membership ativa.
 - Migração tenant-scoped de leitura/criação, CRUD individual e exportação CSV das rotas legadas quando `tenant_routing_enabled=true`.
 - Testes PostgreSQL para migration, Control Plane, RLS e isolamento de contatos/listas.
+- `ENABLE` e `FORCE ROW LEVEL SECURITY` ativos em `subscribers`, `lists` e `subscriber_lists`; acessos sem contexto ficam restritos ao `legacy-workspace`.
+- RBAC tenant aplicado às rotas autenticadas de contatos/listas, com permissões distintas para leitura, gestão, importação e exportação.
+- Operações em lote por IDs (bloqueio, exclusão e associação a listas) tenant-scoped, atômicas e com rejeição cross-tenant.
+- `tenant_id`, FKs compostas, índices e `FORCE RLS` em templates, campanhas, relações campanha/lista, views, mídia, mídia de campanha, links, cliques e bounces.
+- APIs legadas consumidas pela interface principal executadas em transação tenant-scoped para campanhas, templates, mídia, analytics, bounces e dashboard.
+- Perfil e navegação Vue baseados nas permissões efetivas da membership; APIs administrativas globais bloqueadas em hosts tenant.
+- Resolução server-side do tenant por subdomínio ou domínio verificado nos fluxos públicos de inscrição, opt-in, unsubscribe, privacidade, arquivos e tracking.
+- Worker de envio, anexos, criação de links e gravação de bounces isolados pela tenant da campanha/assinante.
+- Provider local de mídia com prefixo físico por tenant e proteção contra traversal.
+- Teste PostgreSQL cross-tenant cobrindo todos os doze conjuntos sob `FORCE RLS`.
+- Tela Vue de importação conectada aos jobs CSV tenant-scoped, com status, progresso e cancelamento entre lotes.
+
+### Operação de plataforma
+
+- Papéis fixos de plataforma e permissões granulares separados dos papéis de tenant, com atribuição/revogação auditada.
+- Portal administrativo para tenants, suspensão/reativação, planos/quota, domínios, troca de owner e solicitação de infraestrutura dedicada.
+- Grants de impersonation com justificativa, MFA recente, expiração curta e revogação, limitados ao Data Plane do tenant alvo.
+- Navegação administrativa baseada nas permissões efetivas do operador de plataforma, mantendo o Super Admin legado como ponte de compatibilidade.
 
 ### Importação tenant-scoped (CSV)
 
@@ -38,31 +56,29 @@ Atualizado em 2026-08-06. Este documento descreve o estado real da branch `featu
 - Idempotency key por tenant evita duplicar jobs em retries.
 - Teste de integração cobrindo criação concorrente entre duas tenants, rejeição de lista cross-tenant e replay de idempotency key (`internal/mailview/importjob/import_integration_test.go`).
 - ZIP e compatibilidade integral com o importador upstream (`internal/subimporter`) ainda não migrados — o worker atual só aceita CSV com colunas `email`/`name`.
-- UI Vue de importação ainda aponta para as rotas globais legadas.
 
 ## Pendências
 
-### Contatos e listas antes de ativar RLS
+### Contatos, listas e importação
 
-- Migrar operações em lote: bloqueio, exclusão e associação a listas.
-- Migrar ZIP/importação avançada (upstream `internal/subimporter`) e todos os endpoints de detalhe ainda globais (activity, bounces, opt-in e subscriptions públicas).
-- Migrar a UI Vue para o contrato tenant-scoped ou desabilitar explicitamente os fluxos legados quando o tenant routing estiver ativo.
-- Habilitar `ENABLE` e `FORCE ROW LEVEL SECURITY` em `subscribers`, `lists` e `subscriber_lists` somente após os itens acima.
-- Criar testes cross-tenant para CRUD, exportação, importação, lote, IDOR e jobs.
+- Migrar ZIP/importação avançada, atributos e modos adicionais do upstream `internal/subimporter`; a interface tenant expõe somente o contrato CSV seguro (`email`/`name`).
+- Migrar expressões SQL em lote para uma linguagem de filtros tenant-safe; no momento elas são recusadas em hosts tenant.
+- Completar testes HTTP de RBAC/IDOR, além dos testes de serviço e PostgreSQL existentes.
 
-### Restante da Fase 2
+### Operação multi-tenant posterior
 
-- Migrar templates, campanhas, campanhas/listas, mídia, links, analytics, bounces e jobs de envio para `tenant_id` + transações tenant-scoped.
-- Criar FKs compostas, índices e RLS por agregado.
-- Resolver tenant para fluxos públicos (tracking, unsubscribe, formulários e arquivos) sem confiar em parâmetros editáveis pelo cliente.
+- Tornar perfis SMTP, remetentes e configurações de entrega específicos por tenant; o transporte de e-mail ainda usa a configuração operacional global.
+- Automatizar verificação DNS e ciclo de vida dos domínios personalizados; o roteamento público só aceita registros já marcados como verificados.
+- Adicionar testes HTTP end-to-end da interface principal e dos fluxos públicos em hostnames de tenants distintos.
+- Avaliar storage de objetos por tenant para produção; o provider filesystem já usa prefixo isolado.
 
 ### Fases posteriores
 
-- Portal visual do cliente e portal administrativo MailView.
-- Domínios personalizados, DNS verification, SMTP e tracking por tenant.
+- Evoluir o portal visual do cliente e o portal administrativo MailView além da adaptação tenant-aware da interface atual.
+- DNS verification automatizada, SMTP e identidade de remetente por tenant.
 - Quotas, billing, onboarding e suspensão.
 - Enterprise: SSO, infra dedicada, SIEM e chaves dedicadas.
 
-## Regra de ativação de RLS
+## Regra de ativação de RLS para os próximos agregados
 
-RLS não deve ser habilitado nas tabelas legadas enquanto existir rota, worker ou tarefa pública usando o pool global do Listmonk. Cada agregado só entra em RLS após todas as consultas correspondentes usarem o contexto transacional de tenant e houver teste cross-tenant automatizado.
+Cada novo agregado só entra em RLS após suas consultas SaaS usarem o contexto transacional de tenant e haver teste cross-tenant automatizado. Durante a migração incremental, consultas upstream sem contexto devem ficar confinadas ao workspace legado e nunca receber uma política de acesso global.

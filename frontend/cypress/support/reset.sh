@@ -2,5 +2,5 @@
 
 pkill -9 listmonk
  cd ../
-./listmonk --install --yes
-./listmonk > /dev/null 2>/dev/null &
+./mailview --install --yes
+./mailview > /dev/null 2>/dev/null &

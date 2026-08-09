@@ -16,6 +16,9 @@ import (
 // ImportSubscribers handles the uploading and bulk importing of
 // a ZIP file of one or more CSV files.
 func (a *App) ImportSubscribers(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusGone, "legacy import is disabled for tenant hosts; use /api/mailview/data/import-jobs")
+	}
 	// Is an import already running?
 	if a.importer.GetStats().Status == subimporter.StatusImporting {
 		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("import.alreadyRunning"))
@@ -120,12 +123,18 @@ func (a *App) ImportSubscribers(c echo.Context) error {
 
 // GetImportSubscribers returns import statistics.
 func (a *App) GetImportSubscribers(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusGone, "legacy import is disabled for tenant hosts; use tenant import-jobs")
+	}
 	s := a.importer.GetStats()
 	return c.JSON(http.StatusOK, okResp{s})
 }
 
 // GetImportSubscriberStats returns import statistics.
 func (a *App) GetImportSubscriberStats(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusGone, "legacy import is disabled for tenant hosts; use tenant import-jobs")
+	}
 	return c.JSON(http.StatusOK, okResp{string(a.importer.GetLogs())})
 }
 
@@ -133,6 +142,9 @@ func (a *App) GetImportSubscriberStats(c echo.Context) error {
 // If there's an ongoing import, it'll be stopped, and if an import
 // is finished, it's state is cleared.
 func (a *App) StopImportSubscribers(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusGone, "legacy import is disabled for tenant hosts; use tenant import-jobs")
+	}
 	a.importer.Stop()
 	return c.JSON(http.StatusOK, okResp{a.importer.GetStats()})
 }

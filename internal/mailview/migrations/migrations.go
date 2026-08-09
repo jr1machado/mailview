@@ -234,6 +234,415 @@ CREATE POLICY mv_import_files_isolation ON mv_import_files
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
 `,
 	},
+	{
+		version: 5,
+		name:    "platform_rbac",
+		sql: `
+INSERT INTO mv_permissions (code, description) VALUES
+    ('tenant.manage.platform', 'Create, edit and offboard tenants'),
+    ('tenant.suspend.platform', 'Suspend and reactivate tenants'),
+    ('membership.manage.platform', 'Manage memberships and roles across tenants'),
+    ('billing.manage.platform', 'Manage plans, quotas and billing across tenants'),
+    ('audit.read.platform', 'Read audit events across tenants'),
+    ('support.impersonate.platform', 'Impersonate a tenant member for support'),
+    ('security.manage.platform', 'Manage platform security configuration'),
+    ('platform.roles.manage', 'Assign and revoke platform roles')
+ON CONFLICT (code) DO NOTHING;
+
+INSERT INTO mv_roles (id, tenant_id, scope, name, is_system) VALUES
+    ('00000000-0000-0000-0000-0000000000f1', NULL, 'platform', 'Platform Super Admin', true),
+    ('00000000-0000-0000-0000-0000000000f2', NULL, 'platform', 'Platform Operations', true),
+    ('00000000-0000-0000-0000-0000000000f3', NULL, 'platform', 'Platform Support', true),
+    ('00000000-0000-0000-0000-0000000000f4', NULL, 'platform', 'Platform Security', true),
+    ('00000000-0000-0000-0000-0000000000f5', NULL, 'platform', 'Platform Billing', true),
+    ('00000000-0000-0000-0000-0000000000f6', NULL, 'platform', 'Platform Auditor', true)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO mv_role_permissions (role_id, permission_code) VALUES
+    ('00000000-0000-0000-0000-0000000000f1', 'tenant.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'tenant.suspend.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'membership.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'billing.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'audit.read.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'support.impersonate.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'security.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f1', 'platform.roles.manage'),
+    ('00000000-0000-0000-0000-0000000000f2', 'tenant.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f2', 'tenant.suspend.platform'),
+    ('00000000-0000-0000-0000-0000000000f2', 'membership.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f3', 'support.impersonate.platform'),
+    ('00000000-0000-0000-0000-0000000000f3', 'membership.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f4', 'security.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f4', 'audit.read.platform'),
+    ('00000000-0000-0000-0000-0000000000f5', 'billing.manage.platform'),
+    ('00000000-0000-0000-0000-0000000000f6', 'audit.read.platform')
+ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS mv_platform_role_assignments (
+    id UUID PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id UUID NOT NULL REFERENCES mv_roles(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, role_id)
+);
+CREATE INDEX IF NOT EXISTS mv_platform_role_assignments_user_idx ON mv_platform_role_assignments (user_id);
+`,
+	},
+	{
+		version: 6,
+		name:    "tenant_domains_plans_quotas",
+		sql: `
+CREATE TABLE IF NOT EXISTS mv_tenant_domains (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES mv_tenants(id) ON DELETE CASCADE,
+    hostname TEXT NOT NULL CHECK (hostname = lower(hostname) AND length(hostname) BETWEEN 3 AND 255),
+    purpose TEXT NOT NULL CHECK (purpose IN ('portal', 'tracking', 'sending', 'return_path', 'public_forms')),
+    verification_method TEXT NOT NULL DEFAULT 'txt' CHECK (verification_method IN ('cname', 'txt')),
+    verification_token TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'failed', 'revoked')),
+    tls_status TEXT NOT NULL DEFAULT 'none' CHECK (tls_status IN ('none', 'pending', 'issued', 'failed')),
+    last_verified_at TIMESTAMPTZ,
+    created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Global uniqueness on hostname prevents the same host being claimed by two tenants (takeover protection).
+CREATE UNIQUE INDEX IF NOT EXISTS mv_tenant_domains_hostname_idx ON mv_tenant_domains (hostname);
+CREATE INDEX IF NOT EXISTS mv_tenant_domains_tenant_idx ON mv_tenant_domains (tenant_id, purpose);
+
+ALTER TABLE mv_tenant_domains ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mv_tenant_domains FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS mv_tenant_domains_isolation ON mv_tenant_domains;
+CREATE POLICY mv_tenant_domains_isolation ON mv_tenant_domains
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+CREATE TABLE IF NOT EXISTS mv_tenant_plans (
+    code TEXT PRIMARY KEY CHECK (code ~ '^[a-z0-9_]{2,40}$'),
+    name TEXT NOT NULL,
+    max_subscribers INTEGER,
+    max_emails_month INTEGER,
+    max_domains INTEGER,
+    max_seats INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO mv_tenant_plans (code, name, max_subscribers, max_emails_month, max_domains, max_seats) VALUES
+    ('starter', 'Starter', 2000, 10000, 1, 3),
+    ('growth', 'Growth', 25000, 150000, 3, 10),
+    ('enterprise', 'Enterprise', NULL, NULL, NULL, NULL)
+ON CONFLICT (code) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS mv_tenant_quotas (
+    tenant_id UUID PRIMARY KEY REFERENCES mv_tenants(id) ON DELETE CASCADE,
+    plan_code TEXT NOT NULL REFERENCES mv_tenant_plans(code) ON DELETE RESTRICT DEFAULT 'starter',
+    max_subscribers INTEGER,
+    max_emails_month INTEGER,
+    max_domains INTEGER,
+    max_seats INTEGER,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS mv_tenant_usage (
+    tenant_id UUID NOT NULL REFERENCES mv_tenants(id) ON DELETE CASCADE,
+    period_start DATE NOT NULL,
+    emails_sent BIGINT NOT NULL DEFAULT 0,
+    subscribers_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, period_start)
+);
+
+-- Schema-only preparation: nullable, unenforced tenant_id columns for the
+-- aggregates that have not migrated to tenant.Begin yet (campaigns,
+-- templates, media). Wiring these into queries and activating RLS is a
+-- separate rollout step, same sequencing already used for subscribers/lists.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE media ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS mv_campaigns_tenant_idx ON campaigns (tenant_id, status);
+CREATE INDEX IF NOT EXISTS mv_templates_tenant_idx ON templates (tenant_id);
+CREATE INDEX IF NOT EXISTS mv_media_tenant_idx ON media (tenant_id);
+`,
+	},
+	{
+		version: 7,
+		name:    "rbac_refinements_and_admin_ops",
+		sql: `
+-- Explicit denial (Fase-4.md 10.4: "negação explícita deve prevalecer").
+-- A permission_code present here for a role always wins over the same code
+-- granted through mv_role_permissions, regardless of insertion order.
+CREATE TABLE IF NOT EXISTS mv_role_permission_denials (
+    role_id UUID NOT NULL REFERENCES mv_roles(id) ON DELETE CASCADE,
+    permission_code TEXT NOT NULL REFERENCES mv_permissions(code) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (role_id, permission_code)
+);
+
+-- Placeholder flag for the Enterprise "move to dedicated" workflow
+-- (Fase-3.md 6.6 / Fase-4.md 11.2). Actually provisioning a dedicated
+-- database/worker/SMTP/namespace is an infrastructure operation outside
+-- this codebase; this table only records the requested mode so the Control
+-- Plane and support tooling have a place to read it from.
+CREATE TABLE IF NOT EXISTS mv_tenant_infrastructure (
+    tenant_id UUID PRIMARY KEY REFERENCES mv_tenants(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL DEFAULT 'shared' CHECK (mode IN ('shared', 'dedicated_requested', 'dedicated')),
+    requested_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Impersonation grants (Fase-4.md 11.3). A grant only widens access to the
+-- MailView tenant data plane (subscribers/lists) for its ttl; it never
+-- carries platform or billing permissions and is always time-boxed.
+CREATE TABLE IF NOT EXISTS mv_impersonation_grants (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES mv_tenants(id) ON DELETE CASCADE,
+    actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    reason TEXT NOT NULL CHECK (length(trim(reason)) >= 10),
+    approved_by INTEGER REFERENCES users(id) ON DELETE RESTRICT,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS mv_impersonation_grants_actor_idx ON mv_impersonation_grants (actor_user_id, expires_at);
+CREATE INDEX IF NOT EXISTS mv_impersonation_grants_tenant_idx ON mv_impersonation_grants (tenant_id, created_at);
+`,
+	},
+	{
+		version: 8,
+		name:    "contacts_lists_rls_and_permissions",
+		sql: `
+-- Granular Data Plane permissions. Existing tenants are upgraded according
+-- to their system-role semantics; custom roles receive no implicit grants.
+INSERT INTO mv_permissions (code, description) VALUES
+    ('subscriber.read.tenant', 'Read subscribers'),
+    ('subscriber.import.tenant', 'Import subscribers'),
+    ('list.read.tenant', 'Read lists'),
+    ('list.manage.tenant', 'Manage lists')
+ON CONFLICT (code) DO NOTHING;
+
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code
+FROM mv_roles r
+CROSS JOIN (VALUES
+    ('subscriber.read.tenant'), ('subscriber.manage.tenant'),
+    ('subscriber.import.tenant'), ('subscriber.export.tenant'),
+    ('list.read.tenant'), ('list.manage.tenant')
+) AS p(code)
+WHERE r.scope = 'tenant' AND r.is_system AND r.name IN ('Tenant Owner', 'Tenant Admin')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r
+CROSS JOIN (VALUES ('subscriber.read.tenant'), ('subscriber.manage.tenant'), ('subscriber.import.tenant'), ('list.read.tenant'), ('list.manage.tenant')) AS p(code)
+WHERE r.scope = 'tenant' AND r.is_system AND r.name = 'Operator'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r
+CROSS JOIN (VALUES ('subscriber.read.tenant'), ('subscriber.export.tenant'), ('list.read.tenant')) AS p(code)
+WHERE r.scope = 'tenant' AND r.is_system AND r.name = 'Analyst'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r
+CROSS JOIN (VALUES ('subscriber.read.tenant'), ('list.read.tenant')) AS p(code)
+WHERE r.scope = 'tenant' AND r.is_system AND r.name = 'Viewer'
+ON CONFLICT DO NOTHING;
+
+-- Missing transaction context is deliberately restricted to the imported
+-- legacy workspace. This preserves upstream jobs during the staged migration
+-- without allowing a forgotten SET LOCAL to see any SaaS tenant.
+DROP POLICY IF EXISTS mv_subscribers_isolation ON subscribers;
+DROP POLICY IF EXISTS mv_lists_isolation ON lists;
+DROP POLICY IF EXISTS mv_subscriber_lists_isolation ON subscriber_lists;
+CREATE POLICY mv_subscribers_isolation ON subscribers
+    USING (tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid, '00000000-0000-0000-0000-000000000001'::uuid))
+    WITH CHECK (tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid, '00000000-0000-0000-0000-000000000001'::uuid));
+CREATE POLICY mv_lists_isolation ON lists
+    USING (tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid, '00000000-0000-0000-0000-000000000001'::uuid))
+    WITH CHECK (tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid, '00000000-0000-0000-0000-000000000001'::uuid));
+CREATE POLICY mv_subscriber_lists_isolation ON subscriber_lists
+    USING (tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid, '00000000-0000-0000-0000-000000000001'::uuid))
+    WITH CHECK (tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid, '00000000-0000-0000-0000-000000000001'::uuid));
+
+ALTER TABLE subscribers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscribers FORCE ROW LEVEL SECURITY;
+ALTER TABLE lists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lists FORCE ROW LEVEL SECURITY;
+ALTER TABLE subscriber_lists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscriber_lists FORCE ROW LEVEL SECURITY;
+`,
+	},
+	{
+		version: 9,
+		name:    "mailing_aggregates_tenant_isolation",
+		sql: `
+INSERT INTO mv_permissions (code, description) VALUES
+ ('campaign.manage.tenant','Manage campaigns'), ('campaign.send.tenant','Send campaigns'),
+ ('analytics.read.tenant','Read analytics'), ('template.read.tenant','Read templates'),
+ ('media.read.tenant','Read media'), ('media.manage.tenant','Manage media'),
+ ('bounce.read.tenant','Read bounces'), ('bounce.manage.tenant','Manage bounces')
+ON CONFLICT (code) DO NOTHING;
+
+-- Upgrade existing system roles. Custom roles remain explicit.
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r CROSS JOIN (VALUES
+ ('campaign.manage.tenant'),('campaign.send.tenant'),('analytics.read.tenant'),('template.read.tenant'),
+ ('media.read.tenant'),('media.manage.tenant'),('bounce.read.tenant'),('bounce.manage.tenant')) p(code)
+WHERE r.scope='tenant' AND r.is_system AND r.name IN ('Tenant Owner','Tenant Admin') ON CONFLICT DO NOTHING;
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r CROSS JOIN (VALUES
+ ('campaign.manage.tenant'),('campaign.send.tenant'),('analytics.read.tenant'),('template.read.tenant'),
+ ('media.read.tenant'),('media.manage.tenant'),('bounce.read.tenant')) p(code)
+WHERE r.scope='tenant' AND r.is_system AND r.name='Campaign Manager' ON CONFLICT DO NOTHING;
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r CROSS JOIN (VALUES
+ ('campaign.manage.tenant'),('template.read.tenant'),('media.read.tenant'),('media.manage.tenant')) p(code)
+WHERE r.scope='tenant' AND r.is_system AND r.name='Operator' ON CONFLICT DO NOTHING;
+INSERT INTO mv_role_permissions (role_id, permission_code)
+SELECT r.id, p.code FROM mv_roles r CROSS JOIN (VALUES
+ ('analytics.read.tenant'),('template.read.tenant'),('media.read.tenant'),('bounce.read.tenant')) p(code)
+WHERE r.scope='tenant' AND r.is_system AND r.name IN ('Analyst','Viewer') ON CONFLICT DO NOTHING;
+
+-- Upstream INSERT statements omit tenant_id; the transaction-local default
+-- keeps those statements compatible while RLS validates the resulting row.
+ALTER TABLE subscribers ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE lists ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE subscriber_lists ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE campaign_lists ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE campaign_views ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE media ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE campaign_media ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE links ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE link_clicks ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE bounces ADD COLUMN IF NOT EXISTS tenant_id UUID;
+
+UPDATE templates SET tenant_id='00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+UPDATE campaigns SET tenant_id='00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+UPDATE campaign_lists cl SET tenant_id=c.tenant_id FROM campaigns c WHERE cl.campaign_id=c.id AND cl.tenant_id IS NULL;
+UPDATE campaign_views cv SET tenant_id=c.tenant_id FROM campaigns c WHERE cv.campaign_id=c.id AND cv.tenant_id IS NULL;
+UPDATE media SET tenant_id='00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+UPDATE campaign_media cm SET tenant_id=c.tenant_id FROM campaigns c WHERE cm.campaign_id=c.id AND cm.tenant_id IS NULL;
+UPDATE links SET tenant_id='00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+UPDATE link_clicks SET tenant_id='00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+UPDATE bounces b SET tenant_id=s.tenant_id FROM subscribers s WHERE b.subscriber_id=s.id AND b.tenant_id IS NULL;
+
+ALTER TABLE templates ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE campaigns ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE campaign_lists ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE campaign_views ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE media ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE campaign_media ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE links ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE link_clicks ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+ALTER TABLE bounces ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id',true),'')::uuid,'00000000-0000-0000-0000-000000000001');
+
+ALTER TABLE templates ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE campaigns ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE campaign_lists ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE campaign_views ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE media ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE campaign_media ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE links ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE link_clicks ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE bounces ALTER COLUMN tenant_id SET NOT NULL;
+
+ALTER TABLE templates ADD CONSTRAINT mv_templates_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE campaigns ADD CONSTRAINT mv_campaigns_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE campaign_lists ADD CONSTRAINT mv_campaign_lists_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE campaign_views ADD CONSTRAINT mv_campaign_views_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE media ADD CONSTRAINT mv_media_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE campaign_media ADD CONSTRAINT mv_campaign_media_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE links ADD CONSTRAINT mv_links_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE link_clicks ADD CONSTRAINT mv_link_clicks_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+ALTER TABLE bounces ADD CONSTRAINT mv_bounces_tenant_fk FOREIGN KEY(tenant_id) REFERENCES mv_tenants(id) ON DELETE RESTRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_templates_tenant_id_idx ON templates(tenant_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS mv_campaigns_tenant_id_idx ON campaigns(tenant_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS mv_media_tenant_id_idx ON media(tenant_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS mv_links_tenant_id_idx ON links(tenant_id,id);
+ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_archive_slug_key;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_campaigns_tenant_archive_slug_idx ON campaigns(tenant_id,archive_slug) WHERE archive_slug IS NOT NULL;
+DROP INDEX IF EXISTS templates_is_default_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_templates_tenant_default_idx ON templates(tenant_id,is_default) WHERE is_default;
+ALTER TABLE links DROP CONSTRAINT IF EXISTS links_url_key;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_links_tenant_url_idx ON links(tenant_id,url);
+
+ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_template_id_fkey;
+ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_archive_template_id_fkey;
+ALTER TABLE campaigns ADD CONSTRAINT mv_campaign_template_tenant_fk FOREIGN KEY(tenant_id,template_id) REFERENCES templates(tenant_id,id) ON DELETE SET NULL (template_id);
+ALTER TABLE campaigns ADD CONSTRAINT mv_campaign_archive_template_tenant_fk FOREIGN KEY(tenant_id,archive_template_id) REFERENCES templates(tenant_id,id) ON DELETE SET NULL (archive_template_id);
+ALTER TABLE campaign_lists DROP CONSTRAINT IF EXISTS campaign_lists_campaign_id_fkey;
+ALTER TABLE campaign_lists DROP CONSTRAINT IF EXISTS campaign_lists_list_id_fkey;
+ALTER TABLE campaign_lists ADD CONSTRAINT mv_campaign_lists_campaign_tenant_fk FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id) ON DELETE CASCADE;
+ALTER TABLE campaign_lists ADD CONSTRAINT mv_campaign_lists_list_tenant_fk FOREIGN KEY(tenant_id,list_id) REFERENCES lists(tenant_id,id) ON DELETE SET NULL (list_id);
+ALTER TABLE campaign_views DROP CONSTRAINT IF EXISTS campaign_views_campaign_id_fkey;
+ALTER TABLE campaign_views DROP CONSTRAINT IF EXISTS campaign_views_subscriber_id_fkey;
+ALTER TABLE campaign_views ADD CONSTRAINT mv_campaign_views_campaign_tenant_fk FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id) ON DELETE CASCADE;
+ALTER TABLE campaign_views ADD CONSTRAINT mv_campaign_views_subscriber_tenant_fk FOREIGN KEY(tenant_id,subscriber_id) REFERENCES subscribers(tenant_id,id) ON DELETE SET NULL (subscriber_id);
+ALTER TABLE campaign_media DROP CONSTRAINT IF EXISTS campaign_media_campaign_id_fkey;
+ALTER TABLE campaign_media DROP CONSTRAINT IF EXISTS campaign_media_media_id_fkey;
+ALTER TABLE campaign_media ADD CONSTRAINT mv_campaign_media_campaign_tenant_fk FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id) ON DELETE CASCADE;
+ALTER TABLE campaign_media ADD CONSTRAINT mv_campaign_media_media_tenant_fk FOREIGN KEY(tenant_id,media_id) REFERENCES media(tenant_id,id) ON DELETE SET NULL (media_id);
+ALTER TABLE link_clicks DROP CONSTRAINT IF EXISTS link_clicks_campaign_id_fkey;
+ALTER TABLE link_clicks DROP CONSTRAINT IF EXISTS link_clicks_link_id_fkey;
+ALTER TABLE link_clicks DROP CONSTRAINT IF EXISTS link_clicks_subscriber_id_fkey;
+ALTER TABLE link_clicks ADD CONSTRAINT mv_click_campaign_tenant_fk FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id) ON DELETE CASCADE;
+ALTER TABLE link_clicks ADD CONSTRAINT mv_click_link_tenant_fk FOREIGN KEY(tenant_id,link_id) REFERENCES links(tenant_id,id) ON DELETE CASCADE;
+ALTER TABLE link_clicks ADD CONSTRAINT mv_click_subscriber_tenant_fk FOREIGN KEY(tenant_id,subscriber_id) REFERENCES subscribers(tenant_id,id) ON DELETE SET NULL (subscriber_id);
+ALTER TABLE bounces DROP CONSTRAINT IF EXISTS bounces_subscriber_id_fkey;
+ALTER TABLE bounces DROP CONSTRAINT IF EXISTS bounces_campaign_id_fkey;
+ALTER TABLE bounces ADD CONSTRAINT mv_bounce_subscriber_tenant_fk FOREIGN KEY(tenant_id,subscriber_id) REFERENCES subscribers(tenant_id,id) ON DELETE CASCADE;
+ALTER TABLE bounces ADD CONSTRAINT mv_bounce_campaign_tenant_fk FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id) ON DELETE SET NULL (campaign_id);
+
+DO $mv$
+DECLARE t text;
+BEGIN
+ FOREACH t IN ARRAY ARRAY['templates','campaigns','campaign_lists','campaign_views','media','campaign_media','links','link_clicks','bounces'] LOOP
+  EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
+  EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
+  EXECUTE format('DROP POLICY IF EXISTS mv_%s_isolation ON %I',t,t);
+  EXECUTE format('CREATE POLICY mv_%s_isolation ON %I USING (tenant_id=COALESCE(NULLIF(current_setting(''app.tenant_id'',true),'''')::uuid,''00000000-0000-0000-0000-000000000001''::uuid)) WITH CHECK (tenant_id=COALESCE(NULLIF(current_setting(''app.tenant_id'',true),'''')::uuid,''00000000-0000-0000-0000-000000000001''::uuid))',t,t);
+ END LOOP;
+END $mv$;
+
+CREATE OR REPLACE FUNCTION mv_campaign_tenant(p_id integer, p_uuid uuid) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_catalog AS $$
+ SELECT tenant_id FROM campaigns WHERE (p_id>0 AND id=p_id) OR (p_uuid IS NOT NULL AND uuid=p_uuid) LIMIT 1
+$$;
+CREATE OR REPLACE FUNCTION mv_media_tenant(p_id integer) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_catalog AS $$ SELECT tenant_id FROM media WHERE id=p_id $$;
+CREATE OR REPLACE FUNCTION mv_subscriber_tenant(p_id bigint) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_catalog AS $$ SELECT tenant_id FROM subscribers WHERE id=p_id $$;
+CREATE OR REPLACE FUNCTION mv_bounce_tenant(p_sub_uuid uuid, p_email text, p_campaign_uuid uuid) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_catalog AS $$
+ SELECT CASE WHEN count(DISTINCT tenant_id)=1 THEN min(tenant_id::text)::uuid ELSE NULL END FROM (
+  SELECT tenant_id FROM campaigns WHERE p_campaign_uuid IS NOT NULL AND uuid=p_campaign_uuid
+  UNION ALL SELECT tenant_id FROM subscribers WHERE p_sub_uuid IS NOT NULL AND uuid=p_sub_uuid
+  UNION ALL SELECT tenant_id FROM subscribers WHERE p_sub_uuid IS NULL AND p_campaign_uuid IS NULL AND lower(email)=lower(p_email)
+ ) resolved
+$$;
+`,
+	},
+	{
+		version: 10,
+		name:    "remove_rls_bypass_helpers",
+		sql: `
+-- These SECURITY DEFINER lookup helpers were introduced during the worker
+-- migration but are no longer used. Tenant discovery now iterates explicit
+-- RLS-scoped transactions, so retaining publicly executable owner-context
+-- functions would create an unnecessary bypass primitive.
+DROP FUNCTION IF EXISTS mv_campaign_tenant(integer, uuid);
+DROP FUNCTION IF EXISTS mv_media_tenant(integer);
+DROP FUNCTION IF EXISTS mv_subscriber_tenant(bigint);
+DROP FUNCTION IF EXISTS mv_bounce_tenant(uuid, text, uuid);
+`,
+	},
 }
 
 // Upgrade applies pending MailView migrations atomically. It is safe to call

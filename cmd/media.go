@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 
 	"github.com/disintegration/imaging"
+	"github.com/knadh/listmonk/internal/mailview/tenant"
+	internalmedia "github.com/knadh/listmonk/internal/media"
 	"github.com/knadh/listmonk/models"
 	"github.com/labstack/echo/v4"
 )
@@ -54,9 +58,14 @@ func (a *App) UploadMedia(c echo.Context) error {
 
 	// Sanitize the filename.
 	fName := makeFilename(file.Filename)
+	if scoped, ok := c.Get("mailview_tenant_context").(context.Context); ok {
+		if scope, ok := tenant.FromContext(scoped); ok {
+			fName = scope.TenantID.String() + "/" + fName
+		}
+	}
 
 	// If the filename already exists in the DB, make it unique by adding a random suffix.
-	if _, err := a.core.GetMedia(0, "", fName, a.media); err == nil {
+	if _, err := a.mailviewCore(c).GetMedia(0, "", fName, a.media); err == nil {
 		suffix, err := generateRandomString(6)
 		if err != nil {
 			a.log.Printf("error generating random string: %v", err)
@@ -107,7 +116,8 @@ func (a *App) UploadMedia(c echo.Context) error {
 		height = he
 
 		// Upload thumbnail.
-		tf, err := a.media.Put(thumbPrefix+fName, contentType, thumbFile)
+		thumbName := filepath.Join(filepath.Dir(fName), thumbPrefix+filepath.Base(fName))
+		tf, err := a.media.Put(thumbName, contentType, thumbFile)
 		if err != nil {
 			cleanUp = true
 			a.log.Printf("error saving thumbnail: %v", err)
@@ -130,12 +140,13 @@ func (a *App) UploadMedia(c echo.Context) error {
 	}
 
 	// Insert the media into the DB.
-	m, err := a.core.InsertMedia(fName, thumbfName, contentType, meta, a.cfg.MediaUpload.Provider, a.media)
+	m, err := a.mailviewCore(c).InsertMedia(fName, thumbfName, contentType, meta, a.cfg.MediaUpload.Provider, a.media)
 	if err != nil {
 		cleanUp = true
 		return err
 	}
 
+	a.scopeTenantMediaURLs(c, &m)
 	return c.JSON(http.StatusOK, okResp{m})
 }
 
@@ -147,9 +158,12 @@ func (a *App) GetAllMedia(c echo.Context) error {
 		pg = a.pg.NewFromURL(c.Request().URL.Query())
 	)
 	// Fetch the media items from the DB.
-	res, total, err := a.core.QueryMedia(a.cfg.MediaUpload.Provider, a.media, query, pg.Offset, pg.Limit)
+	res, total, err := a.mailviewCore(c).QueryMedia(a.cfg.MediaUpload.Provider, a.media, query, pg.Offset, pg.Limit)
 	if err != nil {
 		return err
+	}
+	for i := range res {
+		a.scopeTenantMediaURLs(c, &res[i])
 	}
 
 	out := models.PageResults{
@@ -166,45 +180,102 @@ func (a *App) GetAllMedia(c echo.Context) error {
 func (a *App) GetMedia(c echo.Context) error {
 	// Fetch the media item from the DB.
 	id := getID(c)
-	out, err := a.core.GetMedia(id, "", "", a.media)
+	out, err := a.mailviewCore(c).GetMedia(id, "", "", a.media)
 	if err != nil {
 		return err
 	}
+	a.scopeTenantMediaURLs(c, &out)
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
 // DeleteMedia handles deletion of uploaded media.
 func (a *App) DeleteMedia(c echo.Context) error {
+	id := getID(c)
+	mediaItem, err := a.mailviewCore(c).GetMedia(id, "", "", a.media)
+	if err != nil {
+		return err
+	}
 
 	// Delete the media from the DB. The query returns the filename.
-	id := getID(c)
-	fname, err := a.core.DeleteMedia(id)
+	fname, err := a.mailviewCore(c).DeleteMedia(id)
 	if err != nil {
 		return err
 	}
 
 	// Delete the files from the media store.
-	a.media.Delete(fname)
-	a.media.Delete(thumbPrefix + fname)
+	if err := a.media.Delete(fname); err != nil {
+		a.log.Printf("error deleting media file %s: %v", fname, err)
+	}
+	if mediaItem.Thumb != "" && mediaItem.Thumb != fname {
+		if err := a.media.Delete(mediaItem.Thumb); err != nil {
+			a.log.Printf("error deleting media thumbnail %s: %v", mediaItem.Thumb, err)
+		}
+	}
 
 	return c.JSON(http.StatusOK, okResp{true})
 }
 
-// ServeS3Media serves media files stored in S3 when the public URL is a relative path.
-func (a *App) ServeS3Media(c echo.Context) error {
-	key := c.Param("filepath")
+// ServeMedia serves filesystem or S3 media through the application when the
+// configured public URL is relative. On tenant hosts, the object path must
+// contain exactly the tenant prefix established by UploadMedia.
+func (a *App) ServeMedia(c echo.Context) error {
+	key := strings.TrimPrefix(c.Param("*"), "/")
+	if key == "" {
+		key = strings.TrimPrefix(c.Param("filepath"), "/")
+	}
 	if key == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "missing media file path")
+	}
+	key, err := validateTenantMediaKey(c, key)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "media not found")
 	}
 
 	b, err := a.media.GetBlob(key)
 	if err != nil {
-		a.log.Printf("error fetching media from s3 %s: %v", key, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "error fetching media")
+		a.log.Printf("error fetching media %s: %v", key, err)
+		return echo.NewHTTPError(http.StatusNotFound, "media not found")
 	}
 
 	return c.Stream(http.StatusOK, http.DetectContentType(b), bytes.NewReader(b))
+}
+
+func validateTenantMediaKey(c echo.Context, rawKey string) (string, error) {
+	scoped, ok := c.Get("mailview_tenant_context").(context.Context)
+	if !ok {
+		return internalmedia.ValidateTenantPath(rawKey, "")
+	}
+	scope, ok := tenant.FromContext(scoped)
+	if !ok {
+		return "", echo.NewHTTPError(http.StatusForbidden, "tenant context missing")
+	}
+	return internalmedia.ValidateTenantPath(rawKey, scope.TenantID.String())
+}
+
+// scopeTenantMediaURLs turns URLs hosted by the application's configured
+// root into relative URLs on tenant requests. The browser then keeps the
+// verified tenant hostname instead of crossing over to the global host.
+// External S3/CDN URLs and private presigned URLs remain untouched.
+func (a *App) scopeTenantMediaURLs(c echo.Context, item *internalmedia.Media) {
+	if c.Get("mailview_tenant_context") == nil || item == nil || a.urlCfg == nil {
+		return
+	}
+	root, err := url.Parse(a.urlCfg.RootURL)
+	if err != nil || root.Host == "" {
+		return
+	}
+	relative := func(raw string) string {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Host, root.Host) {
+			return raw
+		}
+		return parsed.RequestURI()
+	}
+	item.URL = relative(item.URL)
+	if item.ThumbURL.Valid {
+		item.ThumbURL.String = relative(item.ThumbURL.String)
+	}
 }
 
 // processImage reads the image file and returns thumbnail bytes and

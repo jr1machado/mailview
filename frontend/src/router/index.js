@@ -137,6 +137,12 @@ const routes = [
     meta: { title: 'maintenance.title', group: 'settings' },
     component: () => import('../views/Maintenance.vue'),
   },
+  {
+    path: '/mailview/tenants',
+    name: 'mailviewTenants',
+    meta: { title: 'MailView Tenants', group: 'mailview' },
+    component: () => import('../views/MailViewTenants.vue'),
+  },
 ];
 
 const router = new VueRouter({

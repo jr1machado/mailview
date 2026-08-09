@@ -94,6 +94,21 @@ RETURNING id, slug, name, status, created_at, updated_at`, out.ID, out.Slug, out
 	return out, tx.Commit()
 }
 
+// EnsureNoBypassRLS refuses to proceed when the connected database role has
+// BYPASSRLS: such a role silently ignores every tenant isolation policy, so
+// tenant.Begin's set_config-based scoping would stop being enforced without
+// any error surfacing anywhere.
+func (s *Service) EnsureNoBypassRLS(ctx context.Context) error {
+	var bypass bool
+	if err := s.db.GetContext(ctx, &bypass, `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`); err != nil {
+		return fmt.Errorf("checking BYPASSRLS on current database role: %w", err)
+	}
+	if bypass {
+		return errors.New("database role has BYPASSRLS; MailView tenant isolation requires a role without it")
+	}
+	return nil
+}
+
 func (s *Service) ListTenants(ctx context.Context) ([]Tenant, error) {
 	out := []Tenant{}
 	err := s.db.SelectContext(ctx, &out, `SELECT id, slug, name, status, created_at, updated_at FROM mv_tenants ORDER BY created_at DESC`)
@@ -194,37 +209,40 @@ func (s *Service) CreateMembership(ctx context.Context, tenantID uuid.UUID, in C
 	return out, tx.Commit()
 }
 
-func (s *Service) ReplaceMembershipRoles(ctx context.Context, tenantID, membershipID uuid.UUID, roleIDs []uuid.UUID, actor Actor) error {
+// ReplaceMembershipRoles returns the affected user's ID so the caller can
+// invalidate their sessions (Fase-4.md 10.4: role changes must invalidate
+// sensitive sessions).
+func (s *Service) ReplaceMembershipRoles(ctx context.Context, tenantID, membershipID uuid.UUID, roleIDs []uuid.UUID, actor Actor) (int, error) {
 	if len(roleIDs) == 0 {
-		return ErrInvalid
+		return 0, ErrInvalid
 	}
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
-	var exists bool
-	if err := tx.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM mv_memberships WHERE id = $1 AND tenant_id = $2)`, membershipID, tenantID); err != nil {
-		return err
-	}
-	if !exists {
-		return ErrNotFound
+	var userID int
+	if err := tx.GetContext(ctx, &userID, `SELECT user_id FROM mv_memberships WHERE id = $1 AND tenant_id = $2`, membershipID, tenantID); err != nil {
+		if isNoRows(err) {
+			return 0, ErrNotFound
+		}
+		return 0, err
 	}
 	if err := validateRoles(ctx, tx, tenantID, roleIDs); err != nil {
-		return err
+		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM mv_membership_roles WHERE membership_id = $1`, membershipID); err != nil {
-		return err
+		return 0, err
 	}
 	for _, roleID := range roleIDs {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mv_membership_roles (membership_id, role_id) VALUES ($1, $2)`, membershipID, roleID); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if err := appendAudit(ctx, tx, &tenantID, actor, "membership.roles.replace", "membership", membershipID.String(), "success", "", nil); err != nil {
-		return err
+		return 0, err
 	}
-	return tx.Commit()
+	return userID, tx.Commit()
 }
 
 func (s *Service) ListAuditEvents(ctx context.Context, tenantID uuid.UUID, limit int) ([]AuditEvent, error) {
@@ -308,8 +326,9 @@ func (s *Service) UseRecoveryCode(ctx context.Context, userID int, code string, 
 
 func seedTenantRoles(ctx context.Context, tx *sqlx.Tx, tenantID uuid.UUID) (map[string]uuid.UUID, error) {
 	permissions := map[string]string{
-		"campaign.create.tenant": "Create campaigns", "campaign.approve.tenant": "Approve campaigns", "campaign.read.tenant": "Read campaigns",
-		"subscriber.manage.tenant": "Manage subscribers", "subscriber.export.tenant": "Export subscribers", "template.manage.tenant": "Manage templates",
+		"campaign.create.tenant": "Create campaigns", "campaign.approve.tenant": "Approve campaigns", "campaign.read.tenant": "Read campaigns", "campaign.manage.tenant": "Manage campaigns", "campaign.send.tenant": "Send campaigns", "analytics.read.tenant": "Read analytics",
+		"subscriber.read.tenant": "Read subscribers", "subscriber.manage.tenant": "Manage subscribers", "subscriber.import.tenant": "Import subscribers", "subscriber.export.tenant": "Export subscribers",
+		"list.read.tenant": "Read lists", "list.manage.tenant": "Manage lists", "template.read.tenant": "Read templates", "template.manage.tenant": "Manage templates", "media.read.tenant": "Read media", "media.manage.tenant": "Manage media", "bounce.read.tenant": "Read bounces", "bounce.manage.tenant": "Manage bounces",
 		"domain.manage.tenant": "Manage domains", "user.invite.tenant": "Invite users", "user.manage.tenant": "Manage users",
 		"audit.read.tenant": "Read audit events", "smtp.manage.tenant": "Manage SMTP", "billing.read.tenant": "Read billing", "billing.manage.tenant": "Manage billing",
 	}
@@ -320,11 +339,11 @@ func seedTenantRoles(ctx context.Context, tx *sqlx.Tx, tenantID uuid.UUID) (map[
 	}
 	roles := map[string][]string{
 		"Tenant Owner":     allPermissionCodes(permissions),
-		"Tenant Admin":     {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "subscriber.manage.tenant", "subscriber.export.tenant", "template.manage.tenant", "domain.manage.tenant", "user.invite.tenant", "user.manage.tenant", "audit.read.tenant", "smtp.manage.tenant"},
-		"Campaign Manager": {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "template.manage.tenant"},
-		"Operator":         {"campaign.create.tenant", "campaign.read.tenant", "subscriber.manage.tenant", "template.manage.tenant"},
-		"Analyst":          {"campaign.read.tenant", "audit.read.tenant"},
-		"Viewer":           {"campaign.read.tenant"},
+		"Tenant Admin":     {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.send.tenant", "analytics.read.tenant", "subscriber.read.tenant", "subscriber.manage.tenant", "subscriber.import.tenant", "subscriber.export.tenant", "list.read.tenant", "list.manage.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant", "bounce.read.tenant", "bounce.manage.tenant", "domain.manage.tenant", "user.invite.tenant", "user.manage.tenant", "audit.read.tenant", "smtp.manage.tenant"},
+		"Campaign Manager": {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.send.tenant", "analytics.read.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant", "bounce.read.tenant"},
+		"Operator":         {"campaign.create.tenant", "campaign.read.tenant", "campaign.manage.tenant", "subscriber.read.tenant", "subscriber.manage.tenant", "subscriber.import.tenant", "list.read.tenant", "list.manage.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant"},
+		"Analyst":          {"campaign.read.tenant", "analytics.read.tenant", "subscriber.read.tenant", "subscriber.export.tenant", "list.read.tenant", "template.read.tenant", "media.read.tenant", "bounce.read.tenant", "audit.read.tenant"},
+		"Viewer":           {"campaign.read.tenant", "analytics.read.tenant", "subscriber.read.tenant", "list.read.tenant", "template.read.tenant", "media.read.tenant", "bounce.read.tenant"},
 		"Billing Manager":  {"billing.read.tenant", "billing.manage.tenant"},
 	}
 	out := make(map[string]uuid.UUID, len(roles))

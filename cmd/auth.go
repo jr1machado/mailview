@@ -754,6 +754,9 @@ func (a *App) doTwofaVerify(c echo.Context, token string, userID int, next strin
 	if !valid {
 		return a.renderTwofaPage(c, token, next, a.i18n.T("globals.messages.invalidValue"))
 	}
+	if err := a.mfa.MarkUsed(c.Request().Context(), user.ID); err != nil {
+		a.log.Printf("recording TOTP verification for user_id=%d: %v", user.ID, err)
+	}
 
 	// Invalidate the token.
 	tmptokens.Delete(token)

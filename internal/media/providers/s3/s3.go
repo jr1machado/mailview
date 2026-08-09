@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
@@ -110,16 +110,15 @@ func (c *Client) GetURL(name string) string {
 
 // GetBlob reads a file from S3 and returns the raw bytes.
 func (c *Client) GetBlob(uurl string) ([]byte, error) {
-	if p, err := url.Parse(uurl); err != nil {
-		uurl = filepath.Base(uurl)
-	} else {
-		uurl = filepath.Base(p.Path)
+	name, err := c.objectName(uurl)
+	if err != nil {
+		return nil, err
 	}
 
 	// Download the file from S3.
 	file, err := c.s3.FileDownload(simples3.DownloadInput{
 		Bucket:    c.opts.Bucket,
-		ObjectKey: c.makeBucketPath(filepath.Base(uurl)),
+		ObjectKey: c.makeBucketPath(name),
 	})
 	if err != nil {
 		return nil, err
@@ -133,6 +132,39 @@ func (c *Client) GetBlob(uurl string) ([]byte, error) {
 	defer file.Close()
 
 	return b, nil
+}
+
+// objectName converts names and generated public/presigned URLs back into
+// the logical object name. filepath.Base used to discard the tenant prefix,
+// making tenant-scoped objects unreadable and collapsing equal filenames.
+func (c *Client) objectName(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimPrefix(parsed.Path, "/")
+
+	if c.opts.PublicURL != "" {
+		if public, err := url.Parse(c.opts.PublicURL); err == nil {
+			prefix := strings.Trim(strings.TrimSpace(public.Path), "/")
+			if prefix != "" && (name == prefix || strings.HasPrefix(name, prefix+"/")) {
+				name = strings.TrimPrefix(strings.TrimPrefix(name, prefix), "/")
+			}
+		}
+	}
+	if c.opts.Bucket != "" && strings.HasPrefix(name, c.opts.Bucket+"/") {
+		name = strings.TrimPrefix(name, c.opts.Bucket+"/")
+	}
+	bucketPath := strings.Trim(c.opts.BucketPath, "/")
+	if bucketPath != "" && (name == bucketPath || strings.HasPrefix(name, bucketPath+"/")) {
+		name = strings.TrimPrefix(strings.TrimPrefix(name, bucketPath), "/")
+	}
+
+	clean := strings.TrimPrefix(path.Clean("/"+name), "/")
+	if clean == "." || clean == "" || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(raw, "\\") {
+		return "", fmt.Errorf("invalid S3 object path")
+	}
+	return clean, nil
 }
 
 // Delete accepts the filename of the object and deletes from S3.

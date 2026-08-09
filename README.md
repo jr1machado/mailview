@@ -1,234 +1,192 @@
-<a href="https://zerodha.tech"><img src="https://zerodha.tech/static/images/github-badge.svg" align="right" /></a>
-
 # MailView
 
-**MailView é um fork independente do [listmonk](https://listmonk.app)**, mantido em repositório próprio (`github.com/jr1machado/mailview`), em transformação para uma plataforma **SaaS multi-tenant** de e-mail marketing e mailing lists. Este README documenta exclusivamente o estado do **MailView** — arquitetura, portas, requisitos, funcionalidades entregues e visão comercial da versão atual.
+Plataforma self-hosted de campanhas, listas e comunicação por e-mail com isolamento multi-tenant, RBAC e operação de plataforma.
 
-> Este projeto reaproveita o motor de envio, o modelo de campanhas e o admin do listmonk (AGPLv3) como base de código, mas segue um roadmap, uma modelagem de dados (`mv_*`) e uma superfície de API (`/api/mailview/*`) próprios, documentados em [`INFO/`](INFO/). Não é o projeto oficial listmonk/listmonk e não deve ser confundido com ele em anúncios, imagens Docker ou pacotes publicados.
+> **Fork independente.** MailView nasceu do código aberto do [listmonk](https://github.com/knadh/listmonk), sob AGPL-3.0, mas possui mantenedor, roadmap, releases, arquitetura SaaS e identidade próprios. Este repositório não é afiliado nem representa o projeto upstream. O caminho do módulo Go `github.com/knadh/listmonk` e o prefixo de configuração `LISTMONK_*` foram preservados exclusivamente para compatibilidade técnica; binários, pacotes, imagens, tags e releases deste fork usam **MailView**.
 
-[![mailview-dashboard](https://github.com/user-attachments/assets/689b5fbb-dd25-4956-a36f-e3226a65f9c4)](https://listmonk.app)
+Release atual: **MailView v0.4.0** (`v0.4.0`) — 9 de agosto de 2026.
 
----
+## Visão comercial
 
-## Sumário
+MailView transforma um motor maduro de campanhas em uma base de produto multiempresa operável por provedores SaaS, agências, grupos empresariais e times que precisam manter seus dados sob controle. Para C-Levels, a proposta combina quatro resultados:
 
-- [O que é o MailView](#o-que-é-o-mailview)
-- [Arquitetura](#arquitetura)
-- [Requisitos de hardware e software](#requisitos-de-hardware-e-software)
-- [Portas e comunicação](#portas-e-comunicação)
-- [Crescimento horizontal (workers como nodes)](#crescimento-horizontal-workers-como-nodes)
-- [Instalação](#instalação)
-- [Funcionalidades e recursos implementados até esta release](#funcionalidades-e-recursos-implementados-até-esta-release)
-- [Segurança e isolamento de dados](#segurança-e-isolamento-de-dados)
-- [Visão comercial — MailView para C-Levels e executivos](#visão-comercial--mailview-para-c-levels-e-executivos)
-- [Documentação relacionada](#documentação-relacionada)
-- [Desenvolvimento](#desenvolvimento)
-- [Licença](#licença)
+- **redução de dependência e custo variável por contato:** a organização controla infraestrutura, armazenamento e provedor de entrega;
+- **governança de dados:** contatos, campanhas, mídia, métricas e bounces são separados por tenant no PostgreSQL com RLS;
+- **delegação segura:** papéis de tenant e de plataforma separam marketing, operação, suporte, segurança, auditoria e billing;
+- **base para monetização:** planos, quotas, consumo, domínios e infraestrutura dedicada já possuem modelo administrativo, sem afirmar que cobrança ou provisionamento automático estejam prontos.
 
----
+Casos de uso relevantes:
 
-## O que é o MailView
+1. agência que opera campanhas de vários clientes sem misturar bases;
+2. SaaS vertical que oferece comunicação white-label dentro do próprio produto;
+3. grupo empresarial com unidades independentes e governança central;
+4. empresa regulada que quer manter PII e histórico em infraestrutura própria;
+5. equipe de suporte que precisa investigar um tenant com acesso temporário, MFA e auditoria.
 
-MailView pega o núcleo de envio de e-mail em massa do listmonk — campanhas, listas, assinantes, templates, bounces, analytics — e adiciona uma camada de **Control Plane multi-tenant** por cima: tenants, papéis (RBAC) por tenant, autenticação de dois fatores própria, trilha de auditoria append-only e isolamento de dados por `tenant_id` + Row-Level Security no PostgreSQL.
+As dores resolvidas incluem contas compartilhadas, falta de rastreabilidade, risco de consulta cross-tenant, importações sem isolamento, custos imprevisíveis de ESPs e ausência de separação entre administração da plataforma e operação do cliente.
 
-O código do produto MailView fica isolado do core herdado em `internal/mailview/` e `cmd/mailview*.go`, para que o fork continue sincronizável com melhorias do listmonk upstream sem conflitos estruturais (ver [`INFO/ADRs.md`](INFO/ADRs.md) e a convenção de extensão em [`INFO/Fase-0.md`](INFO/Fase-0.md)).
+## O que está implementado
 
-## Arquitetura
+O core herdado oferece campanhas regulares e transacionais, listas e segmentação, contatos e atributos, templates HTML/texto, editor visual, mídia, importação, analytics de abertura/clique, bounces, páginas públicas, múltiplos idiomas, SMTP e mensageiros HTTP.
 
+O MailView acrescenta nesta release:
+
+- tenants, memberships, status, owner e auditoria append-only;
+- 7 papéis padrão de tenant, 6 papéis de plataforma, permissões granulares, papéis customizados e negação explícita;
+- TOTP com segredo AES-256-GCM e recovery codes bcrypt de uso único;
+- contexto de tenant por transação e `ENABLE` + `FORCE ROW LEVEL SECURITY` em todos os agregados tenant-scoped;
+- isolamento de contatos, listas, campanhas, templates, mídia, links, tracking, bounces e relacionamentos;
+- roteamento público por subdomínio e domínio personalizado verificado; tenant suspenso é bloqueado;
+- importação CSV assíncrona, idempotente, assinada por HMAC, com progresso e cancelamento;
+- storage local ou S3 com prefixo de tenant e proteção contra traversal;
+- portal de administração da plataforma para tenants, memberships, domínios, planos/quotas, owner, infraestrutura, RBAC e impersonação;
+- impersonação de suporte limitada a 30 minutos, com justificativa, TOTP recente, revogação e auditoria;
+- planos Starter, Growth e Enterprise e registro de uso; enforcement de quota e billing automático ainda não existem;
+- imagem não-root, Compose de produção executável, CI de backend/frontend, testes de RLS e build de release nomeado MailView.
+
+A matriz detalhada, incluindo limites, está em [Funcionalidades](docs/FUNCIONALIDADES.md). As rotas estão em [API MailView](docs/API_MAILVIEW.md) e as limitações em [Issues conhecidos](ISSUES_CONHECIDOS.md).
+
+## Arquitetura resumida
+
+```text
+Internet
+  │ HTTP/HTTPS 80/443
+  ▼
+Caddy / proxy TLS
+  │ HTTP 9000 (rede interna)
+  ▼
+mailview — binário Go único
+  ├─ API REST e páginas públicas
+  ├─ SPA Vue 2.7 embarcada
+  ├─ manager de campanhas e mensagens transacionais
+  ├─ workers internos de importação e bounce
+  └─ Control Plane + Data Plane tenant-scoped
+  │ PostgreSQL 5432 (rede interna)
+  ▼
+PostgreSQL 17 — schema core + mv_* + RLS
+
+Saídas opcionais: SMTP 25/465/587, S3 HTTPS 443, OIDC HTTPS 443 e postbacks HTTP(S).
+Entradas opcionais: webhooks de bounce e fluxos públicos, sempre pelo proxy.
 ```
-                         ┌─────────────────────────┐
-        HTTPS 443/80     │   proxy (edge)           │
-  Internet ─────────────▶│   TLS termination        │
-                         └────────────┬─────────────┘
-                                      │ rede interna "app"
-                    ┌─────────────────┼─────────────────┐
-                    ▼                                     ▼
-          ┌───────────────────┐                 ┌───────────────────┐
-          │  frontend (Vue)     │                 │  api (Go, :9000)   │
-          │  build estático      │◀── mesma origem ─│  binário único:    │
-          └───────────────────┘   hoje              │  admin UI + REST + │
-                                                     │  campaign manager  │
-                                                     │  + mailview/*      │
-                                                     └─────────┬─────────┘
-                                                               │ rede interna "data"
-                                          ┌────────────────────┼────────────────────┐
-                                          ▼                                          ▼
-                               ┌───────────────────┐                     ┌───────────────────┐
-                               │ postgres :5432      │                     │ redis (reservado)   │
-                               │ dado central único   │                     │ ainda sem uso no    │
-                               │ RLS por tenant        │                     │ código da aplicação │
-                               └───────────────────┘                     └───────────────────┘
-```
 
-Componentes reais nesta release:
+O frontend não é um serviço separado e não existe binário de worker independente nesta release. Uma instância ativa executa HTTP e jobs; réplicas com `--passive` atendem HTTP sem iniciar o scanner de campanhas. Redis não integra a arquitetura atual.
 
-| Componente | O que é hoje | Onde está no código |
-|---|---|---|
-| **api** | Binário Go único que serve API REST, admin UI embarcada, envio de campanhas (`internal/manager`) e as extensões MailView (`/api/mailview/*`) | `cmd/main.go` |
-| **frontend** | SPA Vue 3 + Buefy, compilada para estático e embarcada no binário via `stuffbin` | `frontend/` |
-| **postgres** | Fonte única da verdade — schema do listmonk + tabelas `mv_*` do MailView, isoladas via migration runner próprio | `schema.sql`, `internal/mailview/migrations/` |
-| **proxy** | Camada de borda (TLS, roteamento) na topologia de produção de referência | `deploy/compose.production.yml` |
-| **redis** | Declarado na topologia de produção como reserva de capacidade (cache/sessão futura). **Nenhum código do MailView usa Redis hoje** — sessões usam o backend Postgres do listmonk | `deploy/compose.production.yml` |
-| **worker** (imagem) | Placeholder de topologia da Fase 0 para uma futura imagem de worker dedicada. **Ainda não existe um binário/entrypoint de worker separado**: hoje o mesmo binário `api` processa campanhas, e escala-se rodando réplicas com `--passive` (ver seção de crescimento horizontal) | `deploy/compose.production.yml`, `cmd/init.go` |
+Veja [Arquitetura](docs/ARQUITETURA.md), [Integrações](docs/INTEGRACOES.md) e [Referência operacional](docs/REFERENCIA_OPERACIONAL.md).
 
-## Requisitos de hardware e software
+## Portas
 
-### Software
-
-| Item | Versão usada nesta release | Observação |
-|---|---|---|
-| Go | 1.26.1 (`go.mod`, CI) | build do binário `api` |
-| PostgreSQL | Validado em CI/testes de integração com `postgres:16-alpine`; compose de desenvolvimento usa `postgres:17-alpine` | requer extensão `pgcrypto` (`schema.sql`); recomenda-se PostgreSQL 14+ |
-| Node.js + Yarn | LTS atual | build do frontend Vue (`frontend/`); não há build de frontend no pipeline de CI atual, ver [issues conhecidos](ISSUES_CONHECIDOS.md) |
-| Docker + Docker Compose | qualquer versão com suporte a `docker compose` v2 | deploy de referência (dev e produção) |
-
-### Hardware (recomendação operacional, não benchmark formal)
-
-Não há benchmark de carga publicado para o MailView até esta release. Os números abaixo são um ponto de partida operacional para dimensionar um piloto e devem ser validados com teste de carga antes de produção com volume:
-
-| Cenário | CPU | RAM | Disco |
+| Porta | Protocolo | Uso | Exposição recomendada |
 |---|---|---|---|
-| Piloto / staging (1 réplica `api` + Postgres no mesmo host) | 2 vCPU | 2 GB | 20 GB SSD (cresce com volume de assinantes/uploads) |
-| Produção inicial (réplicas `api` separadas do Postgres gerenciado) | 1–2 vCPU por réplica `api` | 1–2 GB por réplica `api` | Postgres dimensionado à parte pelo volume de contatos/eventos |
+| `80/tcp` | HTTP | redirect/ACME no proxy | pública |
+| `443/tcp` | HTTPS | painel, API, páginas, tracking e webhooks | pública |
+| `9000/tcp` | HTTP | processo `mailview` | somente proxy/rede privada |
+| `5432/tcp` | PostgreSQL | aplicação → banco | somente rede de dados |
+| `25`, `465`, `587/tcp` | SMTP/SMTPS/Submission | aplicação → relay externo | somente saída, conforme provedor |
+| `443/tcp` | HTTPS | S3, OIDC e APIs externas | somente saída |
 
-## Portas e comunicação
+O Compose local publica `10443:9000` e, apenas em loopback, `15432:5432`. Portas de desenvolvimento adicionais: MailHog `1025/8025`, Adminer `8070` e Vite `8080`.
 
-| Porta | Protocolo | Serviço | Direção | Observação |
-|---|---|---|---|---|
-| `9000/tcp` | HTTP | `api` (admin UI + REST + `/api/mailview/*`) | entrada | `app.address` no `config.toml`; `EXPOSE 9000` no `Dockerfile` |
-| `80/tcp`, `443/tcp` | HTTP/HTTPS | `proxy` (borda) | entrada pública | único ponto exposto à Internet na topologia de produção (`deploy/compose.production.yml`) |
-| `5432/tcp` | PostgreSQL | `postgres` | interno (`api` → `postgres`) | rede Docker `data`, `internal: true`; nunca exposto à rede `edge` |
-| `25/465/587/tcp` | SMTP | provedor de e-mail externo | saída (`api` → provedor SMTP) | configurado por mensageiro (`internal/messenger/email`), fora do MailView |
+## Requisitos
 
-**Não existe hoje um canal de comunicação central ↔ worker distinto do acesso ao Postgres compartilhado.** O "worker" da topologia de produção é, nesta release, o mesmo binário `api`: todas as réplicas leem/escrevem no mesmo Postgres pela porta `5432`; a única diferenciação de papel entre réplicas é a flag `--passive` (ver abaixo), não um protocolo de fila ou RPC entre nodes.
+Software de build: Go 1.26.5, Node.js 22, Yarn 1.22 e Docker/Compose v2. Runtime: Linux containerizado ou SO suportado pelo Go, PostgreSQL 17 recomendado e acesso a um relay SMTP ou mensageiro HTTP.
 
-## Crescimento horizontal (workers como nodes)
+Referência inicial de capacidade — não é benchmark nem SLA:
 
-O modelo de escala real do MailView nesta release é **réplicas idênticas do binário `api` atrás do proxy**, todas apontando para o mesmo PostgreSQL:
+| Perfil | Aplicação | PostgreSQL | Disco |
+|---|---|---|---|
+| desenvolvimento/piloto | 2 vCPU, 2–4 GiB RAM | compartilhado no host | 20 GiB SSD |
+| produção inicial | 2–4 vCPU, 4–8 GiB RAM | 4 vCPU, 8 GiB RAM | 50+ GiB SSD |
+| alto volume | réplicas HTTP `--passive` e nó ativo dimensionado por throughput | serviço dedicado, IOPS e retenção medidos | sizing por contatos, mídia e eventos |
 
-1. Toda réplica serve a admin UI e a API REST na porta `9000`.
-2. Apenas as réplicas iniciadas **sem** `--passive` processam a fila de campanhas (`internal/manager`, `ScanCampaigns`); réplicas iniciadas com `--passive` atendem tráfego HTTP mas nunca disparam envio de campanha (`cmd/init.go`, flag `passive`).
-3. Adicionar capacidade de leitura/API é literalmente subir mais réplicas `api --passive` atrás do proxy — sem coordenação adicional, porque não há estado local: sessão, fila de import e fila de campanha vivem no Postgres.
-4. Adicionar capacidade de envio de campanha hoje é uma decisão operacional manual (qual réplica roda sem `--passive`), não um scheduler automático de workers — isso é um limite conhecido, listado em [`ISSUES_CONHECIDOS.md`](ISSUES_CONHECIDOS.md).
-5. A imagem `worker` dedicada e a fila assíncrona via Redis/mensageria fazem parte do roadmap de arquitetura (seção 5.6 da [Bíblia de Arquitetura](INFO/Biblia-Projeto.md)), mas **não estão implementadas nesta release** — documentamos aqui para não confundir a topologia de referência (`deploy/compose.production.yml`) com o que já roda em produção hoje.
+Faça teste de carga com o template, tamanho de lista, concorrência e relay reais. A vazão costuma ser limitada pelo SMTP e pelo banco, não apenas pela CPU.
 
-Importação de contatos (nova nesta release) já segue um modelo mais próximo de job/worker dentro do próprio processo: cada upload de CSV cria um job em `mv_import_jobs`, processado em uma goroutine em lotes de 500 linhas por transação tenant-scoped (`internal/mailview/importjob`). Isso não depende de Redis nem de um binário de worker separado — é o primeiro componente do produto pensado como fila, ainda rodando dentro do próprio processo `api`.
+## Instalação com Docker Compose
 
-## Instalação
+Para avaliação local:
 
-### Docker (produção, topologia de referência)
+```sh
+export MAILVIEW_MFA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export MAILVIEW_IMPORT_SIGNING_KEY="$(openssl rand -base64 32)"
+docker compose up -d --build
+```
+
+Acesse `http://localhost:10443`. O banco local fica em `127.0.0.1:15432`. O Compose conserva os nomes de database/role `listmonk` e `listmonk_app` por compatibilidade com volumes existentes; isso não altera o nome do produto ou dos artefatos.
+
+Para produção:
 
 ```sh
 cd deploy
-cp .env.example .env            # aponte para imagens MailView publicadas pelo seu pipeline
+cp .env.example .env
 mkdir -p secrets && chmod 700 secrets
-# crie os arquivos de secrets (database_url, postgres_user, postgres_password, postgres_db)
+printf '%s' 'mailview_admin' > secrets/postgres-user
+openssl rand -base64 36 > secrets/postgres-password
+openssl rand -base64 36 > secrets/app-db-password
+openssl rand -base64 32 > secrets/mfa-encryption-key
+openssl rand -base64 32 > secrets/import-signing-key
+chmod 600 secrets/*
 docker compose --env-file .env -f compose.production.yml config
 docker compose --env-file .env -f compose.production.yml up -d
 ```
 
-Veja [`deploy/README.md`](deploy/README.md). **Não reutilize o `docker-compose.yml` da raiz em produção** — ele é o ambiente de desenvolvimento herdado do listmonk (Postgres local sem TLS, sem secrets por arquivo).
+Defina `MAILVIEW_IMAGE` com tag imutável e configure DNS para `MAILVIEW_PUBLIC_HOST`. Leia [Deploy de produção](deploy/README.md) antes de expor o serviço.
 
-### Binário
+## Binário e release
 
 ```sh
-./listmonk --new-config                          # gera config.toml — edite mailview.* antes de subir
-./listmonk --install                              # schema base (idempotente com --idempotent --yes)
-./listmonk --upgrade --yes --config config.toml   # aplica migrations do listmonk + do MailView
-./listmonk                                         # sobe a API/admin em http://localhost:9000
+make build          # ./mailview
+make dist           # ./mailview com SPA/SQL/i18n embarcados
+./mailview --new-config
+./mailview --install --idempotent --yes --config config.toml
+./mailview --upgrade --yes --config config.toml
+./mailview --config config.toml
 ```
 
-Configure ao menos `mailview.mfa_encryption_key` e `mailview.import_signing_key` (bases64 de 32 bytes) antes de habilitar TOTP e importação de contatos — sem elas, essas duas funcionalidades ficam desabilitadas de propósito em vez de operar sem cifra/assinatura.
+Convenção desta release:
 
-## Funcionalidades e recursos implementados até esta release
+- binário: `mailview` (`mailview.exe` no Windows);
+- tag Git SemVer: `v0.4.0`;
+- arquivos: `MailView_0.4.0_<sistema>_<arquitetura>.tar.gz`;
+- imagem: `ghcr.io/jr1machado/mailview:v0.4.0`;
+- título da release: `MailView v0.4.0`.
 
-### Herdado do listmonk (core inalterado)
-Campanhas, listas, assinantes, templates HTML/texto, bounces, tracking de abertura/clique, dashboard de analytics, importação via ZIP/CSV legada, webhooks de bounce, múltiplos mensageiros (SMTP/HTTP), i18n, admin UI Vue completa.
+## Configuração e compatibilidade
 
-### Fase 0 — Fundação
-- ADRs, threat model e convenção de extensão do fork versionados (`INFO/ADRs.md`, `INFO/Threat-Model.md`).
-- Imagem de runtime não-root (usuário `mailview` uid/gid 10001), `EXPOSE 9000` explícito.
-- Topologia de produção de referência com redes segregadas (`edge`/`app`/`data`), secrets por arquivo, sem `:latest`.
-- Pipeline de CI: `go vet`, `go test`, build, scan de segredos (gitleaks) e vulnerabilidades Go (govulncheck).
+As chaves de bootstrap ficam em `config.toml`; configurações funcionais são persistidas no PostgreSQL e editadas no painel. Por compatibilidade com o loader herdado, variáveis seguem `LISTMONK_secao__chave`, inclusive `_FILE` para secrets. Exemplos:
 
-### Fase 1 — Control Plane e identidade
-- Executor de migrations MailView independente (`internal/mailview/migrations`), com ledger (`mv_schema_migrations`) e lock consultivo — nunca entra no `migList` do upstream.
-- Tenants (`mv_tenants`), memberships (`mv_memberships`), papéis e permissões (`mv_roles`, `mv_permissions`, `mv_role_permissions`) e auditoria append-only (`mv_audit_events`).
-- Criação de tenant cria automaticamente 7 papéis padrão em uma transação: **Tenant Owner, Tenant Admin, Campaign Manager, Operator, Analyst, Viewer, Billing Manager**, com permissões granulares (`campaign.*`, `subscriber.*`, `template.manage`, `domain.manage`, `user.*`, `audit.read`, `billing.*`).
-- MFA TOTP (RFC 6238) com segredo cifrado em repouso com AES-256-GCM (`mailview.mfa_encryption_key`); 10 recovery codes de uso único, guardados como hash bcrypt.
-- API administrativa protegida pelo Super Admin do listmonk (ponte temporária até o papel de plataforma dedicado existir):
+```text
+LISTMONK_app__address=0.0.0.0:9000
+LISTMONK_db__host=postgres
+LISTMONK_db__password_FILE=/run/secrets/app_db_password
+LISTMONK_mailview__mfa_encryption_key_FILE=/run/secrets/mfa_encryption_key
+LISTMONK_mailview__import_signing_key_FILE=/run/secrets/import_signing_key
+```
 
-  | Método | Rota | Função |
-  |---|---|---|
-  | `GET/POST` | `/api/mailview/tenants` | Lista / cria tenant + owner |
-  | `GET/PATCH` | `/api/mailview/tenants/:tenantID` | Consulta / altera status do tenant |
-  | `GET` | `/api/mailview/tenants/:tenantID/roles` | Lista papéis padrão do tenant |
-  | `GET/POST` | `/api/mailview/tenants/:tenantID/memberships` | Lista / cria membership |
-  | `PUT` | `/api/mailview/tenants/:tenantID/memberships/:membershipID/roles` | Substitui papéis de uma membership |
-  | `GET` | `/api/mailview/tenants/:tenantID/audit-events` | Lê trilha de auditoria do tenant |
-  | `POST` | `/api/mailview/profile/mfa/recovery-codes` | Gera 10 recovery codes para o usuário autenticado com TOTP |
+O módulo Go também conserva `github.com/knadh/listmonk` para evitar uma reescrita incompatível de centenas de imports. Novas extensões ficam em `internal/mailview`, tabelas usam prefixo `mv_` e APIs próprias usam `/api/mailview`.
 
-### Fase 2 — Isolamento por tenant (em andamento)
-- `tenant.Context` + `tenant.Begin`/`tenant.InTransaction`: todo acesso tenant-scoped roda dentro de uma transação que fixa `app.tenant_id`, `app.user_id` e `app.request_id` via `set_config(..., true)` — nunca via parâmetro editável pelo cliente.
-- `mv_tenant_settings` sob `FORCE ROW LEVEL SECURITY`, com teste de integração cross-tenant.
-- `subscribers`, `lists` e `subscriber_lists` já têm `tenant_id`, índices e FKs compostas; políticas RLS estão criadas mas **ainda não ativadas** nessas três tabelas — a ativação depende de migrar todas as rotas legadas globais (regra explícita em `INFO/pendencias.md`).
-- Data Plane tenant-scoped para CRUD de contatos e listas em `/api/mailview/tenants/:tenantID/data/{lists,subscribers}`.
-- Resolução opcional de tenant por subdomínio (`{slug}.{tenant_base_domain}`, `mailview.tenant_routing_enabled`), validando membership ativa antes de servir a requisição.
-- **Importação tenant-scoped de contatos (novo nesta release)**:
-  - `mv_import_jobs` / `mv_import_files`, ambas sob `FORCE ROW LEVEL SECURITY`, com idempotency key por tenant e assinatura HMAC do arquivo (`mailview.import_signing_key`).
-  - Upload gravado em prefixo isolado por tenant (`import_storage_dir/<tenant_id>/<job_id>.csv`).
-  - Worker CSV em lotes de 500 linhas por `tenant.InTransaction`, revalidando ownership das listas e a assinatura do arquivo antes de processar.
-  - Endpoints: `POST/GET /api/mailview/tenants/:tenantID/data/import-jobs`, `GET .../import-jobs/:jobID`, `POST .../import-jobs/:jobID/cancel`.
-  - Teste de integração cobrindo importação concorrente entre duas tenants, rejeição de lista cross-tenant e replay de idempotency key.
+## Documentação
 
-Veja o detalhamento completo, incluindo o que falta antes de ativar RLS nas tabelas legadas, em [`INFO/pendencias.md`](INFO/pendencias.md).
+- [Arquitetura completa](docs/ARQUITETURA.md)
+- [Funções e recursos](docs/FUNCIONALIDADES.md)
+- [API e permissões](docs/API_MAILVIEW.md)
+- [Integrações](docs/INTEGRACOES.md)
+- [Hardware, software, portas e operação](docs/REFERENCIA_OPERACIONAL.md)
+- [Release notes v0.4.0](RELEASE_NOTES.md)
+- [Issues conhecidos v0.4.0](ISSUES_CONHECIDOS.md)
+- [Roadmap e decisões](INFO/Biblia-Projeto.md)
+- [Licença AGPL-3.0](LICENSE)
 
-## Segurança e isolamento de dados
+## Desenvolvimento e validação
 
-- **Isolamento**: banco compartilhado + `tenant_id` obrigatório + Row-Level Security é a estratégia padrão (ADR-001); planos Enterprise com banco/worker/SMTP dedicado ficam previstos para fases futuras (ADR-002).
-- **Segredos**: nunca em Compose/imagem; Docker secrets por arquivo (`LISTMONK_*_FILE`), scan de segredos no CI (gitleaks) e `.dockerignore` endurecido.
-- **MFA**: TOTP obrigatório para operações administrativas sensíveis, com recovery codes de uso único.
-- **Auditoria**: toda mutação relevante do Control Plane grava em `mv_audit_events` (append-only).
-- Matriz completa de ameaças e controles obrigatórios em [`INFO/Threat-Model.md`](INFO/Threat-Model.md).
+```sh
+go test ./...
+make build
+cd frontend && yarn lint && yarn build
+docker compose config --quiet
+docker compose --env-file deploy/.env.example -f deploy/compose.production.yml config --quiet
+```
 
-## Visão comercial — MailView para C-Levels e executivos
-
-**MailView é a base para transformar uma ferramenta de e-mail marketing self-hosted em um produto SaaS multi-tenant vendável**, sem abrir mão de dados dentro de infraestrutura própria — um diferencial direto contra ESPs (email service providers) de terceiros que exigem que a base de contatos e o histórico de envio saiam da empresa.
-
-### Dores que o MailView resolve
-
-- **Custo por contato/e-mail imprevisível.** Plataformas SaaS de e-mail marketing cobram por volume de contatos ou de disparos, e o custo escala junto com a base — muitas vezes mais rápido que a receita que ela gera. MailView roda em infraestrutura própria ou de um único provedor cloud, com custo dominado por CPU/armazenamento, não por número de contatos.
-- **Dados de clientes fora do perímetro da empresa.** Enviar a base de contatos para um ESP terceirizado é, na prática, terceirizar um ativo de dados sensível (PII, comportamento de engajamento). MailView mantém o dado no banco da própria empresa (ou do cliente final, no modelo white-label), com RLS por tenant como barreira técnica, não só contratual.
-- **Falta de controle de acesso granular por equipe/cliente.** Ferramentas genéricas de e-mail marketing raramente separam "quem pode aprovar o disparo" de "quem pode editar o template" de "quem só pode ver relatório". O RBAC do MailView já nasce com sete papéis padrão por tenant (Owner, Admin, Campaign Manager, Operator, Analyst, Viewer, Billing Manager), prontos para mapear a estrutura real de uma equipe de marketing/CS.
-- **Auditoria inexistente em ferramentas internas caseiras.** Times que hoje usam scripts ou uma instalação única e compartilhada do listmonk não têm trilha de quem alterou o quê. O MailView grava toda ação administrativa relevante em uma trilha de auditoria append-only, pré-requisito comum de compliance (LGPD/SOC2) que hoje falta em soluções internas ad hoc.
-- **Importação de base sem isolamento em ambientes multi-cliente.** Agências e plataformas que gerenciam e-mail marketing para múltiplos clientes num único banco compartilhado historicamente correm risco de vazamento de lista entre clientes durante import/export. O worker de importação desta release já isola upload, processamento e assinatura de arquivo por tenant desde o primeiro dia.
-
-### Casos de uso relevantes
-
-1. **Agência de marketing digital ou CS** que opera e-mail marketing para dezenas de clientes hoje em planilhas, instâncias isoladas ou ferramentas de terceiros por cliente — MailView consolida tudo em uma única plataforma com isolamento técnico por tenant, sem misturar bases nem faturas.
-2. **SaaS vertical (ex.: sistema de gestão para clínicas, imobiliárias, e-commerce) que quer embutir e-mail marketing como feature paga** — MailView vira o motor white-label por trás de "Campanhas" dentro do produto do cliente, com RBAC e billing por tenant prontos para virar um add-on de receita recorrente.
-3. **Empresa média/grande com política de dados restritiva (financeiro, saúde, jurídico)** que precisa de e-mail marketing mas não pode enviar a base de contatos para um ESP terceirizado — MailView roda dentro do perímetro de rede da empresa, com auditoria e MFA nativos para atender requisitos de segurança interna.
-4. **Operação de growth/CRM com múltiplas marcas ou unidades de negócio** que hoje mantém contas separadas em uma ferramenta paga por assento — o Control Plane do MailView consolida a operação técnica em um único cluster, com contas (tenants) e billing separados por unidade.
-
-### Por que investir agora
-
-O core de envio (campanhas, templates, bounce handling, analytics) já é maduro — é herdado de um produto open source usado em produção por milhares de instalações. O investimento incremental do MailView está concentrado exatamente onde está o risco e o diferencial competitivo de virar SaaS: **isolamento multi-tenant, identidade, RBAC e auditoria** — a parte que normalmente consome mais tempo de engenharia e mais rodadas de due diligence de segurança antes de uma venda B2B. Essa camada já está em construção com RLS, testes cross-tenant automatizados e uma matriz de ameaças formal desde a Fase 0, reduzindo o risco de retrabalho de segurança mais tarde no roadmap.
-
-## Documentação relacionada
-
-- [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — notas desta versão.
-- [`ISSUES_CONHECIDOS.md`](ISSUES_CONHECIDOS.md) — limitações e problemas conhecidos desta versão.
-- [`INFO/Biblia-Projeto.md`](INFO/Biblia-Projeto.md) — arquitetura-alvo completa do produto SaaS (visão de longo prazo, nem tudo implementado ainda).
-- [`INFO/ADRs.md`](INFO/ADRs.md) — decisões de arquitetura aceitas.
-- [`INFO/Threat-Model.md`](INFO/Threat-Model.md) — matriz de ameaças e invariantes de segurança.
-- [`INFO/Fase-0.md`](INFO/Fase-0.md), [`INFO/Fase-1.md`](INFO/Fase-1.md), [`INFO/Fase-2.md`](INFO/Fase-2.md) — o que cada fase entregou.
-- [`INFO/pendencias.md`](INFO/pendencias.md) — estado de entrega e pendências, atualizado a cada incremento.
-- [`deploy/README.md`](deploy/README.md) — deploy de produção de referência.
-
-## Desenvolvimento
-
-MailView é um fork do listmonk e herda sua licença AGPLv3. O backend é Go; o frontend é Vue 3 com Buefy. Para o fluxo de desenvolvimento herdado do listmonk (ambiente local, hot reload, testes), veja o [developer setup do listmonk](https://listmonk.app/docs/developer-setup) — ele continua válido para este fork, exceto pelas extensões descritas acima, que vivem em `internal/mailview/` e `cmd/mailview*.go`.
+Testes PostgreSQL de isolamento usam `MAILVIEW_TEST_DSN`; consulte [Referência operacional](docs/REFERENCIA_OPERACIONAL.md). Contribuições devem preservar a fronteira do fork, o contexto transacional e os testes cross-tenant.
 
 ## Licença
 
-MailView é licenciado sob AGPL v3, herdado do projeto [listmonk](https://listmonk.app) (© Zerodha Technology e contribuidores). Este fork acrescenta código próprio sob a mesma licença.
+MailView é distribuído sob [GNU Affero General Public License v3.0](LICENSE). As atribuições do código derivado permanecem preservadas.

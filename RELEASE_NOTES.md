@@ -1,55 +1,63 @@
-# MailView — Release Notes
+# MailView — Release notes
 
-## mailview-v0.3.0 — 2026-08-07
+## MailView v0.4.0 — `v0.4.0` — 2026-08-09
 
-Primeira tag versionada do fork **MailView**. Consolida as Fases 0, 1 e a primeira metade da Fase 2 do roadmap SaaS multi-tenant descrito em [`INFO/Biblia-Projeto.md`](INFO/Biblia-Projeto.md), incluindo a entrega mais recente: **importação tenant-scoped de contatos via CSV**.
+Release que conclui o isolamento multi-tenant da Sprint/Fase 2 e consolida as funções administrativas já implementadas das Fases 3 e 4. É a primeira release em que binário, pacotes, imagens e pipeline usam o nome MailView de ponta a ponta.
 
-### Novidades desta release
+### Isolamento e Data Plane
 
-**Importação tenant-scoped (CSV)**
-- `mv_import_jobs` e `mv_import_files`, sob `FORCE ROW LEVEL SECURITY`, com idempotency key por tenant e assinatura HMAC do arquivo enviado.
-- Upload isolado por tenant (`import_storage_dir/<tenant_id>/<job_id>.csv`).
-- Worker CSV em lotes de 500 linhas por transação tenant-scoped (`tenant.InTransaction`), com revalidação de ownership de listas e da assinatura do arquivo antes de processar.
-- Endpoints `POST/GET /api/mailview/tenants/:tenantID/data/import-jobs`, `GET .../import-jobs/:jobID`, `POST .../import-jobs/:jobID/cancel`.
-- Nova configuração obrigatória `mailview.import_signing_key` (base64 de 32 bytes) — sem ela, criação de job é recusada em vez de assinar com chave vazia.
-- Teste de integração cobrindo import concorrente entre duas tenants, rejeição de lista de outra tenant e replay de idempotency key.
+- `tenant_id`, integridade composta e `ENABLE` + `FORCE RLS` para contatos, listas, templates, campanhas, mídia, links, tracking e bounces;
+- rotas administrativas do core passam por contexto transacional e permissões MailView;
+- UI publica/consome somente permissões efetivas e bloqueia áreas incompatíveis;
+- páginas públicas e tracking resolvem subdomínio ou domínio verificado, bloqueando tenant suspenso;
+- worker de campanha, anexos, links e bounces preservam tenant;
+- filesystem/S3 usa prefixo UUID e rejeita traversal/cross-tenant.
 
-**Base entregue nas fases anteriores, incluída nesta tag**
-- Control Plane multi-tenant: tenants, memberships, 7 papéis padrão por tenant, permissões granulares, auditoria append-only.
-- MFA TOTP com segredo cifrado (AES-256-GCM) e recovery codes de uso único (bcrypt).
-- Contexto transacional de tenant (`tenant.Context` / `set_config(..., true)`) como única forma permitida de acessar dado tenant-scoped.
-- `tenant_id`, índices e FKs compostas em `subscribers`, `lists` e `subscriber_lists`; Data Plane tenant-scoped para CRUD de contatos e listas.
-- Resolução opcional de tenant por subdomínio, validando membership ativa.
-- Topologia de produção de referência com redes segregadas, secrets por arquivo, imagem runtime não-root.
-- Pipeline de CI com `go vet`, `go test`, build, scan de segredos e de vulnerabilidades Go.
+### Control Plane e segurança
 
-### Mudanças de configuração
+- tenants, memberships, 7 papéis padrão, custom roles, grants e denial explícito;
+- 6 papéis de plataforma e administração de assignments;
+- TOTP AES-256-GCM, recovery codes bcrypt e MFA recente para ações sensíveis;
+- auditoria append-only;
+- domínios, planos Starter/Growth/Enterprise, quotas, usage e estado de infraestrutura;
+- impersonação de suporte com razão, TTL máximo de 30 minutos, revogação e escopo apenas Data Plane;
+- portal Vue para operações de plataforma.
 
-Duas novas chaves em `config.toml` / variáveis `LISTMONK_mailview__*`:
+### Importação
 
-```toml
-[mailview]
-import_storage_dir = "./mailview-imports"   # diretório raiz dos uploads de import, um subdiretório por tenant
-import_signing_key = ""                      # base64 de 32 bytes — obrigatório para habilitar import de contatos
-```
+- CSV tenant-scoped com `email`/`name`, listas alvo, limite de upload, idempotency key e HMAC;
+- diretório por tenant/job, lote transacional de 500, progresso, polling e cancelamento;
+- testes de concorrência, replay e rejeição cross-tenant.
 
-`import_signing_key` vazio **desabilita** a criação de jobs de importação (mesmo comportamento defensivo já usado por `mfa_encryption_key`). Gere com:
+### Produto, build e operação
 
-```sh
-openssl rand -base64 32
-```
+- binário renomeado para `mailview` e frontend package `mailview` 0.4.0;
+- arquivos GoReleaser `MailView_0.4.0_<os>_<arch>.tar.gz` e imagens `ghcr.io/jr1machado/mailview`;
+- workflow acionado por tag SemVer `v*` e título/artefatos identificados como MailView;
+- Go 1.26.5 e dependências `goldmark`, `x/text` e `x/image` atualizadas para corrigir os achados alcançáveis do `govulncheck`;
+- imagem não-root em `/mailview` e Compose local com container/rede MailView;
+- Compose de produção executável e fiel à arquitetura: Caddy + aplicação monolítica + PostgreSQL, sem Redis ou serviços placeholders;
+- documentação completa de arquitetura, recursos, API, integrações, requisitos, portas, operação e visão comercial.
 
 ### Compatibilidade
 
-- Nenhuma tabela legada do listmonk (`subscribers`, `lists`, `campaigns`, etc.) teve seu contrato de leitura alterado por esta release fora da adição de `tenant_id` já entregue na Fase 2. RLS **não** foi ativado em nenhuma tabela legada nesta release.
-- Migrations do MailView (`internal/mailview/migrations`) rodam em ledger próprio (`mv_schema_migrations`), fora do `migList` do upstream listmonk — atualizações do binário continuam aplicando `--upgrade` normalmente.
+O módulo Go `github.com/knadh/listmonk`, prefixo env `LISTMONK_*`, schema core e, no Compose local, database/role legados foram mantidos para compatibilidade. Isso não autoriza publicar artefatos MailView com a marca upstream.
 
-### Como atualizar
+Upgrade:
 
 ```sh
-./listmonk --upgrade --yes --config config.toml
+./mailview --upgrade --yes --config config.toml
+./mailview --config config.toml
 ```
 
-As migrations do MailView (versões 1 a 4 do ledger `mv_schema_migrations`) são aplicadas automaticamente no boot do processo, além do `--upgrade` explícito.
+Faça backup antes. A role runtime deve ser `NOSUPERUSER NOBYPASSRLS`. Novos imports e enrollments TOTP exigem chaves base64 de 32 bytes.
 
-Veja limitações conhecidas desta versão em [`ISSUES_CONHECIDOS.md`](ISSUES_CONHECIDOS.md).
+### Evidências de validação
+
+A Sprint 2 registra passagem de `go test ./...`, suítes PostgreSQL com role administrativa e restrita, `npm run lint` e `npm run build`. A release repete build/test/lint/Compose após a mudança de nomenclatura; detalhes finais ficam no commit/tag.
+
+Consulte [Issues conhecidos](ISSUES_CONHECIDOS.md), [Funcionalidades](docs/FUNCIONALIDADES.md) e [Arquitetura](docs/ARQUITETURA.md).
+
+## MailView v0.3.0 — `mailview-v0.3.0` — 2026-08-07
+
+Primeira tag do fork: Control Plane inicial, MFA, contexto tenant, isolamento inicial de contatos/listas e importação CSV tenant-scoped. Foi substituída por v0.4.0 para uso novo.

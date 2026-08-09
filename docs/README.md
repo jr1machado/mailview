@@ -1,4 +1,14 @@
-# Static website and docs
+# Documentação do MailView
+
+- [Arquitetura](ARQUITETURA.md)
+- [Funções e recursos](FUNCIONALIDADES.md)
+- [API MailView](API_MAILVIEW.md)
+- [Integrações](INTEGRACOES.md)
+- [Referência operacional](REFERENCIA_OPERACIONAL.md)
+
+Os diretórios abaixo preservam documentação do core herdado. Quando houver diferença de isolamento, nomenclatura ou deploy, os documentos MailView prevalecem.
+
+## Site e documentação herdados
 
 This repository contains the source for the static website https://listmonk.app
 
