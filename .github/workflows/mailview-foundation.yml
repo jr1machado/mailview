@@ -63,8 +63,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - name: Reject whitespace errors
-        run: git show --check --format= HEAD
+        run: git diff --check HEAD^ HEAD
       - name: Verify production Compose syntax
         run: |
           mkdir -p deploy/secrets
