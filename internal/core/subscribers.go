@@ -345,7 +345,13 @@ func (c *Core) InsertSubscriber(sub models.Subscriber, listIDs []int, listUUIDs 
 	hasOptin := false
 	if !preconfirm && c.consts.SendOptinConfirmation {
 		// Send a confirmation e-mail (if there are any double opt-in lists).
-		num, err := c.h.SendOptinConfirmation(out, listIDs)
+		var num int
+		var err error
+		if c.tx != nil && c.h.SendOptinConfirmationScoped != nil {
+			num, err = c.h.SendOptinConfirmationScoped(c.q, out, listIDs)
+		} else {
+			num, err = c.h.SendOptinConfirmation(out, listIDs)
+		}
 		if assertOptin && err != nil {
 			return out, hasOptin, err
 		}
@@ -436,7 +442,13 @@ func (c *Core) UpdateSubscriberWithLists(id int, sub models.Subscriber, listIDs 
 	hasOptin := false
 	if !preconfirm && c.consts.SendOptinConfirmation {
 		// Send a confirmation e-mail (if there are any double opt-in lists).
-		num, err := c.h.SendOptinConfirmation(out, listIDs)
+		var num int
+		var err error
+		if c.tx != nil && c.h.SendOptinConfirmationScoped != nil {
+			num, err = c.h.SendOptinConfirmationScoped(c.q, out, listIDs)
+		} else {
+			num, err = c.h.SendOptinConfirmation(out, listIDs)
+		}
 		if assertOptin && err != nil {
 			return out, hasOptin, err
 		}

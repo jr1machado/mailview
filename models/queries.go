@@ -3,11 +3,34 @@ package models
 import (
 	"context"
 	"database/sql"
+	"reflect"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 )
+
+// WithTx returns a shallow copy whose prepared statements are rebound to tx.
+// String query templates are copied unchanged and are executed by Core through
+// the same transaction. This lets the upstream query registry participate in
+// MailView's SET LOCAL tenant boundary without maintaining a second registry.
+func (q *Queries) WithTx(tx *sqlx.Tx) *Queries {
+	copy := *q
+	v := reflect.ValueOf(&copy).Elem()
+	stmtType := reflect.TypeOf((*sqlx.Stmt)(nil))
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if field.Type() != stmtType || field.IsNil() {
+			continue
+		}
+		// Queries are originally prepared from Listmonk's db.Unsafe(). sqlx's
+		// Tx.Stmtx() does not propagate that flag, so preserve it explicitly;
+		// several upstream queries intentionally return helper columns that are
+		// not represented in the destination model.
+		field.Set(reflect.ValueOf(tx.Stmtx(field.Interface().(*sqlx.Stmt)).Unsafe()))
+	}
+	return &copy
+}
 
 // Queries contains all prepared SQL queries.
 type Queries struct {

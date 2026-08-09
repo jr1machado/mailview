@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/jmoiron/sqlx"
 	"github.com/knadh/listmonk/internal/auth"
+	mvmigrations "github.com/knadh/listmonk/internal/mailview/migrations"
 	"github.com/knadh/listmonk/internal/utils"
 	"github.com/knadh/listmonk/models"
 	"github.com/knadh/stuffbin"
@@ -58,6 +60,12 @@ func install(lastVer string, db *sqlx.DB, fs stuffbin.FileSystem, prompt, idempo
 	// Migrate the tables.
 	if err := installSchema(lastVer, db, fs); err != nil {
 		lo.Fatalf("error migrating DB schema: %v", err)
+	}
+	// MailView query definitions reference tenant columns and composite
+	// uniqueness constraints. Apply the extension migrations before preparing
+	// those queries or a fresh install cannot bootstrap.
+	if err := mvmigrations.Upgrade(context.Background(), db); err != nil {
+		lo.Fatalf("running MailView migrations during install: %v", err)
 	}
 
 	// Load the queries.

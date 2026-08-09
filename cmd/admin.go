@@ -100,7 +100,7 @@ func (a *App) GetServerConfig(c echo.Context) error {
 // GetDashboardCharts returns chart data points to render ont he dashboard.
 func (a *App) GetDashboardCharts(c echo.Context) error {
 	// Get the chart data from the DB.
-	out, err := a.core.GetDashboardCharts()
+	out, err := a.mailviewCore(c).GetDashboardCharts()
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (a *App) GetDashboardCharts(c echo.Context) error {
 // GetDashboardCounts returns stats counts to show on the dashboard.
 func (a *App) GetDashboardCounts(c echo.Context) error {
 	// Get the chart data from the DB.
-	out, err := a.core.GetDashboardCounts()
+	out, err := a.mailviewCore(c).GetDashboardCounts()
 	if err != nil {
 		return err
 	}

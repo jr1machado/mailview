@@ -263,17 +263,68 @@ export const deleteSubscribersByQuery = (data) => http.post(
   { loading: models.subscribers },
 );
 
-// Subscriber import.
-export const importSubscribers = (data) => http.post('/api/import/subscribers', data);
+// Subscriber import. Tenant hosts transparently use MailView's isolated CSV
+// jobs while the legacy workspace keeps the upstream ZIP importer contract.
+let dismissedTenantImportID = '';
+const isTenantHost = () => Boolean(store.state.profile && store.state.profile.mailviewTenantId);
+const tenantImportStatus = (job) => {
+  if (!job || job.id === dismissedTenantImportID) return { status: 'none' };
+  const statuses = {
+    pending: 'importing',
+    processing: 'importing',
+    completed: 'finished',
+    cancelled: 'stopped',
+    failed: 'failed',
+  };
+  return {
+    id: job.id,
+    status: statuses[job.status] || 'failed',
+    imported: job.importedRows || 0,
+    total: job.totalRows || 0,
+    error: job.error || '',
+  };
+};
+const getLatestTenantImport = async () => {
+  const jobs = await http.get('/api/mailview/data/import-jobs');
+  return jobs.length > 0 ? jobs[0] : null;
+};
 
-export const getImportStatus = () => http.get('/api/import/subscribers');
+export const importSubscribers = (data) => {
+  if (!isTenantHost()) return http.post('/api/import/subscribers', data);
+  const params = JSON.parse(data.get('params') || '{}');
+  const payload = new FormData();
+  payload.set('file', data.get('file'));
+  payload.set('list_ids', (params.lists || []).join(','));
+  payload.set('idempotency_key', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  dismissedTenantImportID = '';
+  return http.post('/api/mailview/data/import-jobs', payload);
+};
 
-export const getImportLogs = async () => http.get(
-  '/api/import/subscribers/logs',
-  { camelCase: false },
-);
+export const getImportStatus = async () => {
+  if (!isTenantHost()) return http.get('/api/import/subscribers');
+  return tenantImportStatus(await getLatestTenantImport());
+};
 
-export const stopImport = () => http.delete('/api/import/subscribers');
+export const getImportLogs = async () => {
+  if (!isTenantHost()) {
+    return http.get('/api/import/subscribers/logs', { camelCase: false });
+  }
+  const job = await getLatestTenantImport();
+  if (!job || job.id === dismissedTenantImportID) return '';
+  const progress = `${job.processedRows || 0}/${job.totalRows || 0} rows processed`;
+  return job.error ? `${progress}\n${job.error}` : progress;
+};
+
+export const stopImport = async () => {
+  if (!isTenantHost()) return http.delete('/api/import/subscribers');
+  const job = await getLatestTenantImport();
+  if (!job) return { status: 'none' };
+  if (job.status === 'pending' || job.status === 'processing') {
+    await http.post(`/api/mailview/data/import-jobs/${job.id}/cancel`);
+  }
+  dismissedTenantImportID = job.id;
+  return { status: 'none' };
+};
 
 // Bounces.
 export const getBounces = async (params) => http.get(
@@ -573,4 +624,117 @@ export const enableTOTP = (id, data) => http.put(
 export const disableTOTP = (id, data) => http.delete(
   `/api/users/${id}/twofa`,
   { data },
+);
+
+// MailView Control Plane. The backend and UI gate each operation using the
+// effective platform permissions, with the legacy Super Admin bridge.
+export const getMailViewTenants = () => http.get(
+  '/api/mailview/tenants',
+  { loading: models.mailviewTenants },
+);
+
+export const createMailViewTenant = (data) => http.post(
+  '/api/mailview/tenants',
+  data,
+  { loading: models.mailviewTenants },
+);
+
+export const updateMailViewTenantStatus = (id, status) => http.patch(
+  `/api/mailview/tenants/${id}`,
+  { status },
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewTenantDomains = (tenantID) => http.get(
+  `/api/mailview/tenants/${tenantID}/domains`,
+  { loading: models.mailviewTenants },
+);
+
+export const createMailViewTenantDomain = (tenantID, data) => http.post(
+  `/api/mailview/tenants/${tenantID}/domains`,
+  data,
+  { loading: models.mailviewTenants },
+);
+
+export const verifyMailViewTenantDomain = (tenantID, domainID) => http.post(
+  `/api/mailview/tenants/${tenantID}/domains/${domainID}/verify`,
+  {},
+  { loading: models.mailviewTenants },
+);
+
+export const revokeMailViewTenantDomain = (tenantID, domainID) => http.post(
+  `/api/mailview/tenants/${tenantID}/domains/${domainID}/revoke`,
+  {},
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewTenantQuota = (tenantID) => http.get(
+  `/api/mailview/tenants/${tenantID}/quota`,
+  { loading: models.mailviewTenants },
+);
+
+export const setMailViewTenantQuotaPlan = (tenantID, planCode) => http.put(
+  `/api/mailview/tenants/${tenantID}/quota`,
+  { plan_code: planCode },
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewTenantPlans = () => http.get(
+  '/api/mailview/plans',
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewPlatformRoles = () => http.get(
+  '/api/mailview/platform/roles',
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewPlatformAssignments = () => http.get(
+  '/api/mailview/platform/assignments',
+  { loading: models.mailviewTenants },
+);
+
+export const assignMailViewPlatformRole = (userID, roleID) => http.post(
+  '/api/mailview/platform/assignments',
+  { user_id: userID, role_id: roleID },
+  { loading: models.mailviewTenants },
+);
+
+export const revokeMailViewPlatformRole = (userID, roleID) => http.delete(
+  `/api/mailview/platform/assignments/${userID}/${roleID}`,
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewDashboard = () => http.get(
+  '/api/mailview/dashboard',
+  { loading: models.mailviewTenants },
+);
+
+export const resetMailViewTenantOwner = (tenantID, newOwnerUserID) => http.post(
+  `/api/mailview/tenants/${tenantID}/owner`,
+  { new_owner_user_id: newOwnerUserID },
+  { loading: models.mailviewTenants },
+);
+
+export const setMailViewTenantInfrastructure = (tenantID, mode) => http.post(
+  `/api/mailview/tenants/${tenantID}/infrastructure`,
+  { mode },
+  { loading: models.mailviewTenants },
+);
+
+export const startMailViewImpersonation = (data) => http.post(
+  '/api/mailview/platform/impersonation',
+  data,
+  { loading: models.mailviewTenants },
+);
+
+export const listMailViewImpersonationGrants = () => http.get(
+  '/api/mailview/platform/impersonation',
+  { loading: models.mailviewTenants },
+);
+
+export const revokeMailViewImpersonation = (grantID) => http.post(
+  `/api/mailview/platform/impersonation/${grantID}/revoke`,
+  {},
+  { loading: models.mailviewTenants },
 );

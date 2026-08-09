@@ -46,25 +46,51 @@ async function initConfig(app) {
   // $can('permission:name') is used in the UI to check whether the logged in user
   // has a certain permission to toggle visibility of UI objects and UI functionality.
   Vue.prototype.$can = (...perms) => {
-    if (profile.userRole.id === 1) {
+    const tenantPermissions = profile.mailviewPermissions || [];
+    if (!profile.mailviewTenantId && profile.userRole.id === 1) {
       return true;
     }
 
     // If the perm ends with a wildcard, check whether at least one permission
     // in the group is present. Eg: campaigns:* will return true if at least
     // one of campaigns:get, campaigns:manage etc. are present.
+    const tenantMap = {
+      'subscribers:get': 'subscriber.read.tenant',
+      'subscribers:get_all': 'subscriber.read.tenant',
+      'subscribers:manage': 'subscriber.manage.tenant',
+      'subscribers:import': 'subscriber.import.tenant',
+      'lists:get_all': 'list.read.tenant',
+      'lists:manage': 'list.manage.tenant',
+      'lists:manage_all': 'list.manage.tenant',
+      'campaigns:get': 'campaign.read.tenant',
+      'campaigns:get_all': 'campaign.read.tenant',
+      'campaigns:manage': 'campaign.manage.tenant',
+      'campaigns:manage_all': 'campaign.manage.tenant',
+      'campaigns:send': 'campaign.send.tenant',
+      'campaigns:get_analytics': 'analytics.read.tenant',
+      'templates:get': 'template.read.tenant',
+      'templates:manage': 'template.manage.tenant',
+      'media:get': 'media.read.tenant',
+      'media:manage': 'media.manage.tenant',
+      'bounces:get': 'bounce.read.tenant',
+      'bounces:manage': 'bounce.manage.tenant',
+    };
     return perms.some((perm) => {
       if (perm.endsWith('*')) {
         const group = `${perm.split(':')[0]}:`;
-        return profile.userRole.permissions.some((p) => p.startsWith(group));
+        const legacy = profile.userRole.permissions.some((p) => p.startsWith(group));
+        const tenant = Object.keys(tenantMap).some((p) => p.startsWith(group)
+          && tenantPermissions.includes(tenantMap[p]));
+        return profile.mailviewTenantId ? tenant : (legacy || tenant);
       }
 
-      return profile.userRole.permissions.includes(perm);
+      const tenant = tenantMap[perm] && tenantPermissions.includes(tenantMap[perm]);
+      return profile.mailviewTenantId ? tenant : (profile.userRole.permissions.includes(perm) || tenant);
     });
   };
 
   Vue.prototype.$canList = (id, perm) => {
-    if (profile.userRole.id === 1) {
+    if (!profile.mailviewTenantId && profile.userRole.id === 1) {
       return true;
     }
 
@@ -74,7 +100,17 @@ async function initConfig(app) {
       return true;
     }
 
-    return profile.listRole.lists.some((list) => list.id === id && list.permissions.includes(perm));
+    return Boolean(profile.listRole && profile.listRole.lists
+      && profile.listRole.lists.some((list) => list.id === id && list.permissions.includes(perm)));
+  };
+
+  // Platform roles are independent from tenant memberships and Listmonk
+  // roles. The primordial Super Admin remains a compatibility bridge.
+  Vue.prototype.$canPlatform = (...perms) => {
+    if (profile.mailviewTenantId) return false;
+    if (profile.userRole.id === 1) return true;
+    const platformPermissions = profile.mailviewPlatformPermissions || [];
+    return perms.some((perm) => platformPermissions.includes(perm));
   };
 
   // Set the page title after i18n has loaded.

@@ -42,14 +42,21 @@ func TestConcurrentTenantImportsIntegration(t *testing.T) {
 	}
 
 	a, b := uuid.Must(uuid.NewV4()), uuid.Must(uuid.NewV4())
-	if _, err := db.ExecContext(ctx, `INSERT INTO mv_tenants (id,slug,name) VALUES ($1,'import-tenant-a','Import A'),($2,'import-tenant-b','Import B')`, a, b); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO mv_tenants (id,slug,name) VALUES ($1,$2,'Import A'),($3,$4,'Import B')`,
+		a, "import-a-"+a.String()[:8], b, "import-b-"+b.String()[:8]); err != nil {
 		t.Fatal(err)
 	}
+	ctxA := tenant.WithContext(ctx, tenant.Context{TenantID: a, UserID: 1})
+	ctxB := tenant.WithContext(ctx, tenant.Context{TenantID: b, UserID: 1})
 	var listA, listB int
-	if err := db.GetContext(ctx, &listA, `INSERT INTO lists (tenant_id,uuid,name,type,optin,status) VALUES ($1,$2,'A list','private','single','active') RETURNING id`, a, uuid.Must(uuid.NewV4())); err != nil {
+	if err := tenant.InTransaction(ctxA, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxA, &listA, `INSERT INTO lists (uuid,name,type,optin,status) VALUES ($1,'A list','private','single','active') RETURNING id`, uuid.Must(uuid.NewV4()))
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.GetContext(ctx, &listB, `INSERT INTO lists (tenant_id,uuid,name,type,optin,status) VALUES ($1,$2,'B list','private','single','active') RETURNING id`, b, uuid.Must(uuid.NewV4())); err != nil {
+	if err := tenant.InTransaction(ctxB, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxB, &listB, `INSERT INTO lists (uuid,name,type,optin,status) VALUES ($1,'B list','private','single','active') RETURNING id`, uuid.Must(uuid.NewV4()))
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,9 +65,6 @@ func TestConcurrentTenantImportsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	ctxA := tenant.WithContext(ctx, tenant.Context{TenantID: a, UserID: 1})
-	ctxB := tenant.WithContext(ctx, tenant.Context{TenantID: b, UserID: 1})
 
 	// A tenant may not attach an import to another tenant's list.
 	if _, err := svc.CreateJob(ctxA, CreateJobInput{IdempotencyKey: "cross", ListIDs: []int{listB}}, strings.NewReader("email,name\nx@example.test,X\n")); !errors.Is(err, ErrInvalid) {
@@ -106,14 +110,20 @@ func TestConcurrentTenantImportsIntegration(t *testing.T) {
 	}
 
 	var countA, countB int
-	if err := db.GetContext(ctx, &countA, `SELECT count(*) FROM subscribers WHERE tenant_id=$1`, a); err != nil || countA != 2 {
+	if err := tenant.InTransaction(ctxA, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxA, &countA, `SELECT count(*) FROM subscribers`)
+	}); err != nil || countA != 2 {
 		t.Fatalf("tenant A subscribers=%d err=%v", countA, err)
 	}
-	if err := db.GetContext(ctx, &countB, `SELECT count(*) FROM subscribers WHERE tenant_id=$1`, b); err != nil || countB != 1 {
+	if err := tenant.InTransaction(ctxB, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxB, &countB, `SELECT count(*) FROM subscribers`)
+	}); err != nil || countB != 1 {
 		t.Fatalf("tenant B subscribers=%d err=%v", countB, err)
 	}
 	var crossLeak int
-	if err := db.GetContext(ctx, &crossLeak, `SELECT count(*) FROM subscribers WHERE tenant_id=$1 AND email='b1@example.test'`, a); err != nil || crossLeak != 0 {
+	if err := tenant.InTransaction(ctxA, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxA, &crossLeak, `SELECT count(*) FROM subscribers WHERE email='b1@example.test'`)
+	}); err != nil || crossLeak != 0 {
 		t.Fatalf("tenant A leaked tenant B subscriber: count=%d err=%v", crossLeak, err)
 	}
 
@@ -123,8 +133,28 @@ func TestConcurrentTenantImportsIntegration(t *testing.T) {
 		t.Fatalf("idempotency replay=%#v err=%v", replay, err)
 	}
 	var jobCountA int
-	if err := db.GetContext(ctx, &jobCountA, `SELECT count(*) FROM mv_import_jobs WHERE tenant_id=$1`, a); err != nil || jobCountA != 1 {
+	if err := tenant.InTransaction(ctxA, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxA, &jobCountA, `SELECT count(*) FROM mv_import_jobs`)
+	}); err != nil || jobCountA != 1 {
 		t.Fatalf("tenant A job rows=%d err=%v", jobCountA, err)
 	}
-}
 
+	// A cancelled job is checked under row lock before each batch and cannot
+	// resume writing subscribers or be overwritten as completed by its worker.
+	cancelled, err := svc.CreateJob(ctxA, CreateJobInput{IdempotencyKey: "job-cancelled", ListIDs: []int{listA}}, strings.NewReader("email,name\ncancelled@example.test,Cancelled\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CancelJob(ctxA, cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := svc.importRows(ctxA, cancelled.ID, []byte("email,name\ncancelled@example.test,Cancelled\n"), []int64{int64(listA)}); !errors.Is(err, errJobCancelled) {
+		t.Fatalf("cancelled import continued: %v", err)
+	}
+	var cancelledSubscriberCount int
+	if err := tenant.InTransaction(ctxA, db, func(tx *sqlx.Tx, _ tenant.Context) error {
+		return tx.GetContext(ctxA, &cancelledSubscriberCount, `SELECT count(*) FROM subscribers WHERE email='cancelled@example.test'`)
+	}); err != nil || cancelledSubscriberCount != 0 {
+		t.Fatalf("cancelled import wrote subscribers: count=%d err=%v", cancelledSubscriberCount, err)
+	}
+}

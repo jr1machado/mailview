@@ -23,7 +23,7 @@ module.exports = (on, config) => {
         ? { ...process.env }
         : { ...process.env, LISTMONK_ADMIN_USER: 'admin', LISTMONK_ADMIN_PASSWORD: 'listmonk' };
 
-      execSync('./listmonk --install --yes', { cwd: rootDir, env, stdio: 'ignore' });
+      execSync('./mailview --install --yes', { cwd: rootDir, env, stdio: 'ignore' });
 
       // Replace the first SMTP block with local MailHog.
       const smtpSQL = "UPDATE settings SET value = (SELECT jsonb_agg(smtp || jsonb_build_object('host','localhost','port',1025,'tls_type','none')) FROM jsonb_array_elements(value) AS smtp) WHERE key = 'smtp';";
@@ -37,7 +37,7 @@ module.exports = (on, config) => {
       }
 
       // Start the server.
-      const child = spawn('./listmonk', [], {
+      const child = spawn('./mailview', [], {
         cwd: rootDir,
         detached: true,
         stdio: 'ignore',

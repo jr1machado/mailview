@@ -50,8 +50,29 @@ func TestContactsAndListsIsolationIntegration(t *testing.T) {
 	if _, err := svc.CreateSubscriber(ctxA, CreateSubscriberInput{Email: "bad@example.test", Name: "Bad", ListIDs: []int{listB.ID}}); err == nil {
 		t.Fatal("cross-tenant list attachment was allowed")
 	}
+	subA, err := svc.CreateSubscriber(ctxA, CreateSubscriberInput{Email: "batch-a@example.test", Name: "Batch A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subB, err := svc.CreateSubscriber(ctxB, CreateSubscriberInput{Email: "batch-b@example.test", Name: "Batch B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BlocklistSubscribers(ctxA, []int{subA.ID, subB.ID}); err == nil {
+		t.Fatal("cross-tenant bulk blocklist was allowed")
+	}
+	gotA, err := svc.GetSubscriber(ctxA, subA.ID)
+	if err != nil || gotA.Status != "enabled" {
+		t.Fatalf("failed bulk operation was not atomic: %#v, %v", gotA, err)
+	}
+	if err := svc.ManageSubscriberLists(ctxA, []int{subA.ID}, []int{listB.ID}, "add", "confirmed"); err == nil {
+		t.Fatal("cross-tenant bulk list attachment was allowed")
+	}
+	if err := svc.ManageSubscriberLists(ctxA, []int{subA.ID}, []int{listA.ID}, "add", "confirmed"); err != nil {
+		t.Fatalf("same-tenant bulk list attachment failed: %v", err)
+	}
 	subs, err := svc.ListSubscribers(ctxA)
-	if err != nil || len(subs) != 1 || subs[0].Email != "a@example.test" {
+	if err != nil || len(subs) != 2 {
 		t.Fatalf("tenant A subscribers=%#v err=%v", subs, err)
 	}
 	lists, err := svc.ListLists(ctxB)

@@ -1,82 +1,96 @@
 name: mailview
 
-# Fase 0: topologia de produção. As imagens de frontend, API e worker serão
-# publicadas nas fases subsequentes; o arquivo evita defaults e :latest desde já.
+# Topologia executável da release MailView v0.4.0: proxy TLS, aplicação
+# monolítica e PostgreSQL. O frontend e os workers estão no mesmo binário.
 services:
   proxy:
-    image: ${MAILVIEW_PROXY_IMAGE:?defina MAILVIEW_PROXY_IMAGE}
+    image: ${MAILVIEW_PROXY_IMAGE:-caddy:2.10-alpine}
+    restart: unless-stopped
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      MAILVIEW_PUBLIC_HOST: ${MAILVIEW_PUBLIC_HOST:-localhost}
     ports: ["80:80", "443:443"]
-    networks: [edge, app]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    depends_on: [app]
 
-  frontend:
-    image: ${MAILVIEW_FRONTEND_IMAGE:?defina MAILVIEW_FRONTEND_IMAGE}
-    read_only: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    networks: [app]
-
-  api:
-    image: ${MAILVIEW_API_IMAGE:?defina MAILVIEW_API_IMAGE}
-    read_only: true
-    user: "10001:10001"
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    environment:
-      DATABASE_URL_FILE: /run/secrets/database_url
-    secrets: [database_url]
-    networks: [app, data]
-
-  worker:
-    image: ${MAILVIEW_WORKER_IMAGE:?defina MAILVIEW_WORKER_IMAGE}
+  app:
+    image: ${MAILVIEW_IMAGE:?defina MAILVIEW_IMAGE com uma tag imutável}
+    restart: unless-stopped
     read_only: true
     user: "10001:10001"
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    command: ["sh", "-c", "./mailview --install --idempotent --yes --config '' && ./mailview --upgrade --yes --config '' && exec ./mailview --config ''"]
     environment:
-      DATABASE_URL_FILE: /run/secrets/database_url
-    secrets: [database_url]
-    networks: [app, data]
+      LISTMONK_app__address: 0.0.0.0:9000
+      LISTMONK_db__host: postgres
+      LISTMONK_db__port: 5432
+      LISTMONK_db__database: mailview
+      LISTMONK_db__user: mailview_app
+      LISTMONK_db__password_FILE: /run/secrets/app_db_password
+      LISTMONK_db__ssl_mode: disable
+      LISTMONK_mailview__mfa_encryption_key_FILE: /run/secrets/mfa_encryption_key
+      LISTMONK_mailview__import_signing_key_FILE: /run/secrets/import_signing_key
+      LISTMONK_mailview__import_storage_dir: /mailview/imports
+      LISTMONK_mailview__tenant_routing_enabled: ${MAILVIEW_TENANT_ROUTING_ENABLED:-false}
+      LISTMONK_mailview__tenant_base_domain: ${MAILVIEW_TENANT_BASE_DOMAIN:-}
+      TZ: ${TZ:-Etc/UTC}
+    secrets: [app_db_password, mfa_encryption_key, import_signing_key]
+    tmpfs: [/tmp]
+    volumes:
+      - media-data:/mailview/uploads
+      - import-data:/mailview/imports
+    networks: [edge, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
-    image: ${MAILVIEW_POSTGRES_IMAGE:?defina MAILVIEW_POSTGRES_IMAGE}
+    image: ${MAILVIEW_POSTGRES_IMAGE:-postgres:17-alpine}
+    restart: unless-stopped
     environment:
       POSTGRES_USER_FILE: /run/secrets/postgres_user
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_DB_FILE: /run/secrets/postgres_db
-    secrets: [postgres_user, postgres_password, postgres_db]
-    volumes: [postgres-data:/var/lib/postgresql/data]
+      POSTGRES_DB: mailview
+      MAILVIEW_APP_DB_PASSWORD_FILE: /run/secrets/app_db_password
+    secrets: [postgres_user, postgres_password, app_db_password]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db-init/02-mailview-app-role.sh:/docker-entrypoint-initdb.d/02-mailview-app-role.sh:ro
     networks: [data]
-
-  redis:
-    image: ${MAILVIEW_REDIS_IMAGE:?defina MAILVIEW_REDIS_IMAGE}
-    command: ["redis-server", "--appendonly", "yes"]
-    read_only: true
-    tmpfs: [/tmp]
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    volumes: [redis-data:/data]
-    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/postgres_user) -d mailview"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 networks:
   edge: {}
-  app:
-    internal: true
   data:
     internal: true
 
 secrets:
-  database_url:
-    file: ${MAILVIEW_DATABASE_URL_FILE:?defina MAILVIEW_DATABASE_URL_FILE}
   postgres_user:
-    file: ${MAILVIEW_DB_USER_FILE:?defina MAILVIEW_DB_USER_FILE}
+    file: ${MAILVIEW_DB_USER_FILE:-./secrets/postgres-user}
   postgres_password:
-    file: ${MAILVIEW_DB_PASSWORD_FILE:?defina MAILVIEW_DB_PASSWORD_FILE}
-  postgres_db:
-    file: ${MAILVIEW_DB_NAME_FILE:?defina MAILVIEW_DB_NAME_FILE}
+    file: ${MAILVIEW_DB_PASSWORD_FILE:-./secrets/postgres-password}
+  app_db_password:
+    file: ${MAILVIEW_APP_DB_PASSWORD_FILE:-./secrets/app-db-password}
+  mfa_encryption_key:
+    file: ${MAILVIEW_MFA_KEY_FILE:-./secrets/mfa-encryption-key}
+  import_signing_key:
+    file: ${MAILVIEW_IMPORT_KEY_FILE:-./secrets/import-signing-key}
 
 volumes:
   postgres-data: {}
-  redis-data: {}
+  media-data: {}
+  import-data: {}
+  caddy-data: {}
+  caddy-config: {}

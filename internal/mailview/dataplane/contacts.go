@@ -8,6 +8,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/jmoiron/sqlx"
 	"github.com/knadh/listmonk/internal/mailview/tenant"
+	"github.com/lib/pq"
 )
 
 var ErrInvalid = errors.New("invalid contacts or lists input")
@@ -154,5 +155,111 @@ func (s *Service) DeleteSubscriber(ctx context.Context, id int) error {
 			return errors.New("subscriber not found")
 		}
 		return nil
+	})
+}
+
+func validIDs(ids []int) bool {
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		if id < 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) DeleteLists(ctx context.Context, ids []int) error {
+	if !validIDs(ids) {
+		return ErrInvalid
+	}
+	return tenant.InTransaction(ctx, s.db, func(tx *sqlx.Tx, scope tenant.Context) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM lists WHERE tenant_id=$1 AND id = ANY($2)`, scope.TenantID, pq.Array(ids))
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n != int64(len(ids)) {
+			return errors.New("one or more lists not found in tenant")
+		}
+		return nil
+	})
+}
+
+func (s *Service) DeleteSubscribers(ctx context.Context, ids []int) error {
+	if !validIDs(ids) {
+		return ErrInvalid
+	}
+	return tenant.InTransaction(ctx, s.db, func(tx *sqlx.Tx, scope tenant.Context) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM subscribers WHERE tenant_id=$1 AND id = ANY($2)`, scope.TenantID, pq.Array(ids))
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n != int64(len(ids)) {
+			return errors.New("one or more subscribers not found in tenant")
+		}
+		return nil
+	})
+}
+
+func (s *Service) BlocklistSubscribers(ctx context.Context, ids []int) error {
+	if !validIDs(ids) {
+		return ErrInvalid
+	}
+	return tenant.InTransaction(ctx, s.db, func(tx *sqlx.Tx, scope tenant.Context) error {
+		res, err := tx.ExecContext(ctx, `UPDATE subscribers SET status='blocklisted', updated_at=now() WHERE tenant_id=$1 AND id = ANY($2)`, scope.TenantID, pq.Array(ids))
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n != int64(len(ids)) {
+			return errors.New("one or more subscribers not found in tenant")
+		}
+		return nil
+	})
+}
+
+func (s *Service) ManageSubscriberLists(ctx context.Context, subscriberIDs, listIDs []int, action, status string) error {
+	if !validIDs(subscriberIDs) || !validIDs(listIDs) {
+		return ErrInvalid
+	}
+	if status == "" {
+		status = "confirmed"
+	}
+	if status != "confirmed" && status != "unconfirmed" && status != "unsubscribed" {
+		return ErrInvalid
+	}
+	return tenant.InTransaction(ctx, s.db, func(tx *sqlx.Tx, scope tenant.Context) error {
+		var count int
+		if err := tx.GetContext(ctx, &count, `SELECT count(*) FROM subscribers WHERE tenant_id=$1 AND id = ANY($2)`, scope.TenantID, pq.Array(subscriberIDs)); err != nil {
+			return err
+		}
+		if count != len(subscriberIDs) {
+			return errors.New("one or more subscribers not found in tenant")
+		}
+		if err := tx.GetContext(ctx, &count, `SELECT count(*) FROM lists WHERE tenant_id=$1 AND id = ANY($2)`, scope.TenantID, pq.Array(listIDs)); err != nil {
+			return err
+		}
+		if count != len(listIDs) {
+			return errors.New("one or more lists not found in tenant")
+		}
+		switch action {
+		case "add":
+			_, err := tx.ExecContext(ctx, `INSERT INTO subscriber_lists (tenant_id,subscriber_id,list_id,status)
+SELECT $1,s.id,l.id,$4 FROM subscribers s CROSS JOIN lists l
+WHERE s.tenant_id=$1 AND l.tenant_id=$1 AND s.id = ANY($2) AND l.id = ANY($3)
+ON CONFLICT (subscriber_id,list_id) DO UPDATE SET status=EXCLUDED.status, updated_at=now()`, scope.TenantID, pq.Array(subscriberIDs), pq.Array(listIDs), status)
+			return err
+		case "remove":
+			_, err := tx.ExecContext(ctx, `DELETE FROM subscriber_lists WHERE tenant_id=$1 AND subscriber_id = ANY($2) AND list_id = ANY($3)`, scope.TenantID, pq.Array(subscriberIDs), pq.Array(listIDs))
+			return err
+		case "unsubscribe":
+			_, err := tx.ExecContext(ctx, `UPDATE subscriber_lists SET status='unsubscribed', updated_at=now() WHERE tenant_id=$1 AND subscriber_id = ANY($2) AND list_id = ANY($3)`, scope.TenantID, pq.Array(subscriberIDs), pq.Array(listIDs))
+			return err
+		default:
+			return ErrInvalid
+		}
 	})
 }

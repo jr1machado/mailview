@@ -1,6 +1,6 @@
 -- links
 -- name: create-link
-INSERT INTO links (uuid, url) VALUES($1, $2) ON CONFLICT (url) DO UPDATE SET url=EXCLUDED.url RETURNING uuid;
+INSERT INTO links (uuid, url) VALUES($1, $2) ON CONFLICT (tenant_id, url) DO UPDATE SET url=EXCLUDED.url RETURNING uuid;
 
 -- name: get-link-url
 SELECT url FROM links WHERE uuid = $1;

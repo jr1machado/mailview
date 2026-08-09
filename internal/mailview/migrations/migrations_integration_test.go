@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // TestUpgradeIntegration is opt-in because it needs a PostgreSQL instance with
@@ -41,5 +41,15 @@ func TestUpgradeIntegration(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM mv_audit_events WHERE id = '00000000-0000-0000-0000-000000000001'`); err == nil {
 		t.Fatal("append-only audit trigger allowed delete")
+	}
+	var protected int
+	if err := db.GetContext(ctx, &protected, `
+SELECT count(*) FROM pg_class
+WHERE relname = ANY($1) AND relrowsecurity AND relforcerowsecurity`,
+		pq.Array([]string{"subscribers", "lists", "subscriber_lists", "templates", "campaigns", "campaign_lists", "campaign_views", "media", "campaign_media", "links", "link_clicks", "bounces"})); err != nil {
+		t.Fatal(err)
+	}
+	if protected != 12 {
+		t.Fatalf("FORCE RLS active on %d/12 tenant Data Plane tables", protected)
 	}
 }

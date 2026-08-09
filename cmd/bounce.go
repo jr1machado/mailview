@@ -16,7 +16,7 @@ import (
 func (a *App) GetBounce(c echo.Context) error {
 	// Fetch one bounce from the DB.
 	id := getID(c)
-	out, err := a.core.GetBounce(id)
+	out, err := a.mailviewCore(c).GetBounce(id)
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,7 @@ func (a *App) GetBounces(c echo.Context) error {
 	)
 
 	// Query and fetch bounces from the DB.
-	res, total, err := a.core.QueryBounces(campID, 0, source, orderBy, order, pg.Offset, pg.Limit)
+	res, total, err := a.mailviewCore(c).QueryBounces(campID, 0, source, orderBy, order, pg.Offset, pg.Limit)
 	if err != nil {
 		return err
 	}
@@ -60,13 +60,14 @@ func (a *App) GetBounces(c echo.Context) error {
 func (a *App) GetSubscriberBounces(c echo.Context) error {
 	subID := getID(c)
 
-	// Check if the user has access to at least one of the lists on the subscriber.
-	if err := a.hasSubPerm(auth.GetUser(c), []int{subID}); err != nil {
-		return err
+	if c.Get("mailview_tenant_context") == nil {
+		if err := a.hasSubPerm(auth.GetUser(c), []int{subID}); err != nil {
+			return err
+		}
 	}
 
 	// Query and fetch bounces from the DB.
-	out, _, err := a.core.QueryBounces(0, subID, "", "", "", 0, 1000)
+	out, _, err := a.mailviewCore(c).QueryBounces(0, subID, "", "", "", 0, 1000)
 	if err != nil {
 		return err
 	}
@@ -93,7 +94,7 @@ func (a *App) DeleteBounces(c echo.Context) error {
 	}
 
 	// Delete bounces from the DB.
-	if err := a.core.DeleteBounces(ids, all); err != nil {
+	if err := a.mailviewCore(c).DeleteBounces(ids, all); err != nil {
 		return err
 	}
 
@@ -104,7 +105,7 @@ func (a *App) DeleteBounces(c echo.Context) error {
 func (a *App) DeleteBounce(c echo.Context) error {
 	// Delete bounces from the DB.
 	id := getID(c)
-	if err := a.core.DeleteBounces([]int{id}, false); err != nil {
+	if err := a.mailviewCore(c).DeleteBounces([]int{id}, false); err != nil {
 		return err
 	}
 
@@ -113,7 +114,7 @@ func (a *App) DeleteBounce(c echo.Context) error {
 
 // BlocklistBouncedSubscribers handles blocklisting of all bounced subscribers.
 func (a *App) BlocklistBouncedSubscribers(c echo.Context) error {
-	if err := a.core.BlocklistBouncedSubscribers(); err != nil {
+	if err := a.mailviewCore(c).BlocklistBouncedSubscribers(); err != nil {
 		return err
 	}
 

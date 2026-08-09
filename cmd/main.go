@@ -221,16 +221,19 @@ func main() {
 		// Initialize the media store.
 		media = initMediaStore(ko)
 
-		fbOptinNotify = makeOptinNotifyHook(ko.Bool("privacy.unsubscribe_header"), urlCfg, queries, i18n)
+		fbOptinNotify       = makeOptinNotifyHook(ko.Bool("privacy.unsubscribe_header"), urlCfg, queries, i18n)
+		fbScopedOptinNotify = func(q *models.Queries, sub models.Subscriber, listIDs []int) (int, error) {
+			return makeOptinNotifyHook(ko.Bool("privacy.unsubscribe_header"), urlCfg, q, i18n)(sub, listIDs)
+		}
 
 		// Crud core.
-		core = initCore(fbOptinNotify, queries, db, i18n, ko)
+		core = initCore(fbOptinNotify, fbScopedOptinNotify, queries, db, i18n, ko)
 
 		// Initialize all messengers, SMTP and postback.
 		msgrs = append(initSMTPMessengers(), initPostbackMessengers(ko)...)
 
 		// Campaign manager.
-		mgr = initCampaignManager(msgrs, queries, urlCfg, core, media, i18n, ko)
+		mgr = initCampaignManager(msgrs, queries, urlCfg, core, media, db, i18n, ko)
 
 		// Bulk importer.
 		importer = initImporter(queries, db, core, i18n, ko)
@@ -249,7 +252,7 @@ func main() {
 	// Initialize the bounce manager that processes bounces from webhooks and
 	// POP3 mailbox scanning.
 	if ko.Bool("bounce.enabled") {
-		bounce = initBounceManager(core.RecordBounce, queries.RecordBounce, lo, ko)
+		bounce = initBounceManager(makeTenantBounceRecorder(db, core), queries.RecordBounce, lo, ko)
 	}
 
 	// Assign the default `email` messenger to the app.
@@ -257,6 +260,10 @@ func main() {
 		if m.Name() == "email" {
 			emailMsgr = m.(*email.Emailer)
 		}
+	}
+
+	if err := mvcontrol.New(db).EnsureNoBypassRLS(context.Background()); err != nil {
+		lo.Fatalf("MailView tenant isolation check failed: %v", err)
 	}
 
 	mfa, err := mvcontrol.NewMFA(db, ko.String("mailview.mfa_encryption_key"))

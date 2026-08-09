@@ -1,33 +1,40 @@
 # All LISTMONK_* env variables also support the LISTMONK_*_FILE pattern for loading secrets from files with Docker secrets and Podman
 # eg: LISTMONK_ADMIN_USER -> LISTMONK_ADMIN_USER_FILE=/path/to/file_with_value
 
-x-db-credentials: &db-credentials                             # Use the default POSTGRES_ credentials if they're available or simply default to "listmonk"
-  POSTGRES_USER: &db-user listmonk                            # for database user, password, and database name
-  POSTGRES_PASSWORD: &db-password listmonk
+x-db-credentials: &db-credentials                             # Postgres superuser, used only to initialize/administer the database.
+  POSTGRES_USER: &db-user listmonk                            # MailView's own tenant isolation check (Fase-3.md 6.5) refuses to boot
+  POSTGRES_PASSWORD: &db-password listmonk                    # if the app connects with this role, since it has BYPASSRLS.
   POSTGRES_DB: &db-name listmonk
 
+x-app-db-credentials: &app-db-credentials                     # Restricted role the app actually connects as (no SUPERUSER/BYPASSRLS).
+  db-user: &app-db-user listmonk_app                          # Created by deploy/db-init/01-app-role.sql on first init of a fresh volume.
+  db-password: &app-db-password listmonk_app
+
 services:
-  # listmonk app
+  # MailView app (built from this repo, not the upstream listmonk image)
   app:
-    image: listmonk/listmonk:latest
-    container_name: listmonk_app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mailview:local
+    container_name: mailview_app
     restart: unless-stopped
     ports:
-      - "9000:9000"                                           # To change the externally exposed port, change to: $custom_port:9000
+      - "10443:9000"                                           # To change the externally exposed port, change to: $custom_port:9000
     networks:
-      - listmonk
-    hostname: listmonk.example.com                            # Recommend using FQDN for hostname
+      - mailview
+    hostname: mailview.example.com                           # Recommend using FQDN for hostname
     depends_on:
       - db
-    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
+    command: [sh, -c, "./mailview --install --idempotent --yes --config '' && ./mailview --upgrade --yes --config '' && ./mailview --config ''"]
                                                               # --config (file) param is set to empty so that listmonk only uses the env vars (below) for config.
                                                               # --install --idempotent ensures that DB installation happens only once on an empty DB, on the first ever start.
                                                               # --upgrade automatically runs any DB migrations when a new image is pulled.
 
     environment:                                              # The same params as in config.toml are passed as env vars here.
       LISTMONK_app__address: 0.0.0.0:9000
-      LISTMONK_db__user: *db-user
-      LISTMONK_db__password: *db-password
+      LISTMONK_db__user: *app-db-user
+      LISTMONK_db__password: *app-db-password
       LISTMONK_db__database: *db-name
       LISTMONK_db__host: db
       LISTMONK_db__port: 5432
@@ -38,19 +45,24 @@ services:
       TZ: Etc/UTC
       LISTMONK_ADMIN_USER: ${LISTMONK_ADMIN_USER:-}           # If these (optional) are set during the first `docker compose up`, then the Super Admin user is automatically created.
       LISTMONK_ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-}   # Otherwise, the user can be setup on the web app after the first visit to http://localhost:9000
+      LISTMONK_mailview__mfa_encryption_key: ${MAILVIEW_MFA_ENCRYPTION_KEY:-}       # base64, 32 bytes decoded. Empty disables new TOTP enrollment (Fase-1).
+      LISTMONK_mailview__import_signing_key: ${MAILVIEW_IMPORT_SIGNING_KEY:-}       # base64, 32 bytes decoded. Empty disables tenant CSV import (Fase-1).
+      LISTMONK_mailview__tenant_routing_enabled: ${MAILVIEW_TENANT_ROUTING_ENABLED:-false}
+      LISTMONK_mailview__tenant_base_domain: ${MAILVIEW_TENANT_BASE_DOMAIN:-}       # e.g. mailview.example.com for {slug}.mailview.example.com routing.
+      LISTMONK_mailview__import_storage_dir: /mailview/imports
     volumes:
-      - ./uploads:/listmonk/uploads:rw                        # Mount an uploads directory on the host to /listmonk/uploads inside the container.
-                                                              # To use this, change directory path in Admin -> Settings -> Media to /listmonk/uploads
+      - ./uploads:/mailview/uploads:rw                        # Configure Admin -> Settings -> Media with /mailview/uploads.
+      - mailview-imports:/mailview/imports:rw
 
   # Postgres database
   db:
     image: postgres:17-alpine
-    container_name: listmonk_db
+    container_name: mailview_db
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5432:5432"                                 # Only bind on the local interface. To connect to Postgres externally, change this to 0.0.0.0
+      - "127.0.0.1:15432:5432"                                # Only bind on the local interface. To connect to Postgres externally, change this to 0.0.0.0
     networks:
-      - listmonk
+      - mailview
     environment:
       <<: *db-credentials
     healthcheck:
@@ -62,9 +74,11 @@ services:
       - type: volume
         source: listmonk-data
         target: /var/lib/postgresql/data
+      - ./deploy/db-init:/docker-entrypoint-initdb.d:ro         # Creates the restricted listmonk_app role on first init of a fresh volume.
 
 networks:
-  listmonk:
+  mailview:
 
 volumes:
   listmonk-data:
+  mailview-imports:

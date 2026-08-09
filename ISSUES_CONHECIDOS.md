@@ -1,33 +1,49 @@
-# MailView — Issues conhecidos (mailview-v0.3.0)
+# MailView v0.4.0 — Issues conhecidos
 
-Lista de limitações conhecidas nesta versão, para não serem confundidas com bugs não identificados. Itens de roadmap com prazo/priorização vivem em [`INFO/pendencias.md`](INFO/pendencias.md); aqui documentamos **o que já existe mas tem uma limitação conhecida**, para uso operacional e devido diligence.
+Limitações confirmadas desta release; roadmap não deve ser confundido com recurso entregue.
 
-## Isolamento multi-tenant
+## Operação e escala
 
-- **RLS ainda não ativado nas tabelas legadas.** `subscribers`, `lists` e `subscriber_lists` já têm `tenant_id`, índices e políticas RLS criadas, mas `ENABLE`/`FORCE ROW LEVEL SECURITY` só serão ligados depois que todas as rotas legadas globais (lote, activity, bounces, opt-in, subscriptions públicas) migrarem para o contexto transacional. Até lá, o isolamento dessas três tabelas depende de toda query nova passar por `tenant.InTransaction` — não há ainda uma segunda camada de defesa no banco.
-- **Campanhas, templates, mídia, analytics e bounces ainda não são tenant-scoped.** Só contatos, listas e importação de contatos passaram pela migração de isolamento até esta release.
-- **UI Vue administrativa não foi migrada para os endpoints `/api/mailview/*`.** Ela continua operando sobre as rotas globais do listmonk; os endpoints tenant-scoped desta release só têm cliente via API direta.
-- **Ponte de Super Admin é temporária.** Todos os endpoints `/api/mailview/*` (Control Plane e Data Plane) exigem hoje o Super Admin global do listmonk (`requirePlatformAdmin` em `cmd/mailview.go`), não um papel de plataforma dedicado — é uma decisão deliberada da Fase 1, mas significa que não há hoje um usuário "apenas operador de plataforma" sem acesso de Super Admin do core.
+- O binário é monolítico. `--passive` desliga o scanner de campanhas, mas não existe worker dedicado, eleição de leader ou scheduler distribuído.
+- Import em `processing` não é retomado automaticamente após reinício; pode exigir correção operacional do job.
+- Cancelamento de import ocorre entre lotes, não interrompe uma transação em curso.
+- Filesystem em múltiplos nós exige volume compartilhado; S3 é recomendado.
+- Compose de referência não fornece HA, backup, autoscaling ou PostgreSQL replicado.
+- Não há métricas Prometheus/OpenTelemetry próprias nem SLO/SLA publicado.
 
-## Importação de contatos
+## Produto e multi-tenancy
 
-- **Só CSV com colunas `email`/`name`.** ZIP e o mapeamento de colunas avançado do importador legado (`internal/subimporter`: atributos customizados, pré-confirmação, delimitador configurável) não foram portados para o worker tenant-scoped.
-- **Sem retomada de job parcialmente processado.** Se o processo reiniciar no meio de um job `processing`, o job fica travado nesse status — não há um mecanismo de retomada nem de detecção de job órfão nesta release.
-- **Sem trilha de auditoria por job de import.** Diferente do Control Plane (que grava toda ação em `mv_audit_events`), a criação/cancelamento de job de importação não gera evento de auditoria ainda.
-- **Sem rate limit dedicado no endpoint de upload.** O limite de 64 MB por arquivo existe (`io.LimitReader` em `internal/mailview/importjob`), mas não há limite de jobs simultâneos por tenant nem throttling de upload.
-- **Assinatura HMAC usa uma única chave estática por instalação.** Não há rotação de chave nem versionamento de chave para `mailview.import_signing_key` (o MFA já tem `key_version` na tabela; o import ainda não).
+- Planos, quotas e usage são modelo/gestão; limites não bloqueiam contatos, envios, domínios ou seats.
+- Billing, invoices, MRR/ARR e gateway de pagamento não estão implementados.
+- `dedicated_requested`/`dedicated` registra intenção/estado; não provisiona banco, SMTP, storage, worker ou namespace.
+- SMTP/settings continuam globais. RBAC expõe `smtp.manage.tenant`, mas não há perfil SMTP isolado por tenant.
+- Verificação de domínio é manual; não consulta DNS nem provisiona TLS automaticamente por tenant.
+- Não há workflow formal separado de review/approval, embora permissões de campanha existam.
 
-## Escalabilidade / topologia
+## Importação e dados
 
-- **Não existe binário/imagem de worker separado.** `deploy/compose.production.yml` declara um serviço `worker` como placeholder de topologia da Fase 0; hoje o mesmo binário `api` processa campanhas e importações. Rodar réplicas com `--passive` é uma decisão operacional manual, não automática.
-- **Redis está na topologia de produção mas não é usado por nenhum código do MailView.** Está reservado para uma futura camada de cache/sessão/fila; hoje é um serviço ocioso se subido.
-- **Sem scheduler de capacidade.** Adicionar/remover réplicas `api` é manual; não há autoscaling nem métricas de fila expostas para orientar essa decisão.
+- Import MailView aceita CSV simples com `email` e `name`; ZIP, mapeamento avançado e atributos ficam no importador legado e não são oferecidos no modo tenant.
+- HMAC usa uma chave por instalação, sem rotação/versionamento de chave.
+- Upload possui limite de tamanho, mas não quota/rate limit dedicado por tenant.
+- Arquivos importados precisam de política operacional de retenção/limpeza.
 
-## CI / build
+## Identidade e segurança
 
-- **CI não builda nem testa o frontend Vue.** O workflow `mailview-foundation.yml` roda `go vet`, `go test` e `make build` (que empacota o frontend via `stuffbin`, mas assume `frontend/dist` já existente) — não há job de lint/test do lado Vue nesta release.
-- **Testes de integração do MailView são opt-in e não rodam em CI.** Todos os arquivos `*_integration_test.go` sob `internal/mailview/` são pulados sem a variável de ambiente `MAILVIEW_TEST_DSN` — nenhum workflow atual a define, então a suíte de integração roda apenas manualmente (validada localmente para esta release contra `postgres:16-alpine`).
+- OIDC autocriado não cria automaticamente membership MailView.
+- Auditoria é append-only na aplicação, mas não é imutável contra DBA/superuser.
+- A ponte de Super Admin herdada continua aceita em parte do Control Plane; papéis de plataforma refinam funções sensíveis, mas a separação completa do RBAC core ainda é compatibilidade em evolução.
+- Prefixo `LISTMONK_*`, módulo Go upstream e nomes do database/role do Compose local permanecem por compatibilidade técnica.
 
-## Documentação / branding
+## Entregabilidade
 
-- **Módulo Go e nome do binário permanecem `listmonk`.** `go.mod` (`github.com/knadh/listmonk`) e o binário gerado pelo `Makefile` (`listmonk`) não foram renomeados para MailView nesta release — renomear o import path do módulo tocaria centenas de arquivos e não estava no escopo desta entrega. O branding MailView está aplicado em: nome do repositório, tag de release, imagens/serviços Docker (`deploy/compose.production.yml`, usuário runtime `mailview`), documentação e API (`/api/mailview/*`).
+- SPF, DKIM, DMARC, reputação, warm-up, throttling do provedor e feedback loops dependem da operação/provedor.
+- Não há spam score, reputação automática, suppressions globais externas ou otimização por IA.
+- Webhooks dependem da configuração correta de assinatura/secret de cada provedor.
+
+## Release e plataformas
+
+- Artefatos para sistemas/arquiteturas listados no GoReleaser são cross-compilados; esta release não declara que todas as combinações receberam teste E2E nativo.
+- O frontend preserva avisos de depreciação Sass e chunks grandes no build; não impedem o funcionamento, mas pedem modernização.
+- Documentação histórica sob `docs/docs/content` ainda usa a marca upstream; serve como referência do core. Os documentos no topo de `docs/` prevalecem.
+
+Relate defeitos novos separando reprodução, host tenant/legado, versão/tag, role do banco e logs sem segredos.

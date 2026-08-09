@@ -1,0 +1,22 @@
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+List-Unsubscribe: <http://e2e.mailview.test:10444/subscription/a4d46856-a221-4b79-81dd-a3be313d3a9d/05b2d2de-2167-45e2-9143-434f916b15e9>
+X-Listmonk-Campaign: a4d46856-a221-4b79-81dd-a3be313d3a9d
+Message-Id: <iFSDfwP610wcf2bVNRsRtyI5@example.test>
+Subject: =?UTF-8?q?Entrega_final_para_Bruno_Evid=C3=AAncia?=
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+To: <bruno.e2e@example.test>
+From: "MailView E2E" <sender@example.test>
+Date: Sun, 09 Aug 2026 12:57:09 +0000
+Mime-Version: 1.0
+X-Listmonk-Subscriber: 05b2d2de-2167-45e2-9143-434f916b15e9
+
+<!doctype html><html><body><header><strong>MailView E2E</strong></header><h=
+1>Ol=C3=A1 Bruno Evid=C3=AAncia</h1><p>Pipeline completo validado.</p><p><a=
+ href=3D"http://e2e.mailview.test:10444/link/543a7fa0-f88f-4cc3-815c-59e834=
+5dd24e/a4d46856-a221-4b79-81dd-a3be313d3a9d/00000000-0000-0000-0000-0000000=
+00000">Link rastre=C3=A1vel E2E</a></p><img src=3D"http://e2e.mailview.test=
+:10444/campaign/a4d46856-a221-4b79-81dd-a3be313d3a9d/00000000-0000-0000-000=
+0-000000000000/px.png" width=3D"1" height=3D"1" style=3D"display:none;max-h=
+eight:0;max-width:0;opacity:0" alt=3D""><footer>Teste automatizado local</f=
+ooter></body></html>

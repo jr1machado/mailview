@@ -124,7 +124,7 @@ func (t *tplRenderer) Render(w io.Writer, name string, data any, c echo.Context)
 // required to submit a subscription.
 func (a *App) GetPublicLists(c echo.Context) error {
 	// Get all public lists.
-	lists, err := a.core.GetLists(models.ListTypePublic, models.ListStatusActive, true, nil)
+	lists, err := a.mailviewCore(c).GetLists(models.ListTypePublic, models.ListStatusActive, true, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("public.errorFetchingLists"))
 	}
@@ -150,7 +150,7 @@ func (a *App) GetPublicLists(c echo.Context) error {
 func (a *App) ViewCampaignMessage(c echo.Context) error {
 	// Get the campaign.
 	campUUID := c.Param("campUUID")
-	camp, err := a.core.GetCampaign(0, campUUID, "")
+	camp, err := a.mailviewCore(c).GetCampaign(0, campUUID, "")
 	if err != nil {
 		if er, ok := err.(*echo.HTTPError); ok {
 			if er.Code == http.StatusBadRequest {
@@ -165,7 +165,7 @@ func (a *App) ViewCampaignMessage(c echo.Context) error {
 
 	// Get the subscriber.
 	subUUID := c.Param("subUUID")
-	sub, err := a.core.GetSubscriber(0, subUUID, "")
+	sub, err := a.mailviewCore(c).GetSubscriber(0, subUUID, "")
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.Render(http.StatusNotFound, tplMessage,
@@ -203,7 +203,7 @@ func (a *App) SubscriptionPage(c echo.Context) error {
 	)
 
 	// Get the subscriber from the DB.
-	s, err := a.core.GetSubscriber(0, subUUID, "")
+	s, err := a.mailviewCore(c).GetSubscriber(0, subUUID, "")
 	if err != nil {
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorProcessingRequest")))
@@ -230,7 +230,7 @@ func (a *App) SubscriptionPage(c echo.Context) error {
 		out.ShowManage = showManage
 
 		// Get the subscriber's lists from the DB to render in the template.
-		subs, err := a.core.GetSubscriptions(0, subUUID, false)
+		subs, err := a.mailviewCore(c).GetSubscriptions(0, subUUID, false)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("public.errorFetchingLists"))
 		}
@@ -272,7 +272,7 @@ func (a *App) SubscriptionPrefs(c echo.Context) error {
 		blocklist = a.cfg.Privacy.AllowBlocklist && req.Blocklist
 	)
 	if !req.Manage || blocklist {
-		if err := a.core.UnsubscribeByCampaign(subUUID, campUUID, blocklist); err != nil {
+		if err := a.mailviewCore(c).UnsubscribeByCampaign(subUUID, campUUID, blocklist); err != nil {
 			return c.Render(http.StatusInternalServerError, tplMessage,
 				makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.T("public.errorProcessingRequest")))
 		}
@@ -295,7 +295,7 @@ func (a *App) SubscriptionPrefs(c echo.Context) error {
 	}
 
 	// Get the subscriber from the DB.
-	sub, err := a.core.GetSubscriber(0, subUUID, "")
+	sub, err := a.mailviewCore(c).GetSubscriber(0, subUUID, "")
 	if err != nil {
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("globals.messages.pFound",
@@ -304,7 +304,7 @@ func (a *App) SubscriptionPrefs(c echo.Context) error {
 	sub.Name = req.Name
 
 	// Update the subscriber properties in the DB.
-	if _, err := a.core.UpdateSubscriber(sub.ID, sub); err != nil {
+	if _, err := a.mailviewCore(c).UpdateSubscriber(sub.ID, sub); err != nil {
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.T("public.errorProcessingRequest")))
 	}
@@ -317,7 +317,7 @@ func (a *App) SubscriptionPrefs(c echo.Context) error {
 	}
 
 	// Get subscription from teh DB.
-	subs, err := a.core.GetSubscriptions(0, subUUID, false)
+	subs, err := a.mailviewCore(c).GetSubscriptions(0, subUUID, false)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("public.errorFetchingLists"))
 	}
@@ -334,7 +334,7 @@ func (a *App) SubscriptionPrefs(c echo.Context) error {
 	}
 
 	// Unsubscribe from lists.
-	if err := a.core.UnsubscribeLists([]int{sub.ID}, nil, unsubUUIDs); err != nil {
+	if err := a.mailviewCore(c).UnsubscribeLists([]int{sub.ID}, nil, unsubUUIDs); err != nil {
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.T("public.errorProcessingRequest")))
 
@@ -368,7 +368,7 @@ func (a *App) OptinPage(c echo.Context) error {
 	}
 
 	// Get the list of subscription lists where the subscriber hasn't confirmed.
-	lists, err := a.core.GetSubscriberLists(0, subUUID, nil, req.ListUUIDs, models.SubscriptionStatusUnconfirmed, "")
+	lists, err := a.mailviewCore(c).GetSubscriberLists(0, subUUID, nil, req.ListUUIDs, models.SubscriptionStatusUnconfirmed, "")
 	if err != nil {
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorFetchingLists")))
@@ -409,7 +409,7 @@ func (a *App) confirmOptinSubscription(c echo.Context, subUUID string, listUUIDs
 		}
 	}
 
-	if err := a.core.ConfirmOptionSubscription(subUUID, listUUIDs, meta); err != nil {
+	if err := a.mailviewCore(c).ConfirmOptionSubscription(subUUID, listUUIDs, meta); err != nil {
 		a.log.Printf("error confirming opt-in subscription: %v", err)
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorProcessingRequest")))
@@ -428,7 +428,7 @@ func (a *App) SubscriptionFormPage(c echo.Context) error {
 	}
 
 	// Get all public lists from the DB.
-	lists, err := a.core.GetLists(models.ListTypePublic, models.ListStatusActive, true, nil)
+	lists, err := a.mailviewCore(c).GetLists(models.ListTypePublic, models.ListStatusActive, true, nil)
 	if err != nil {
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorFetchingLists")))
@@ -559,7 +559,7 @@ func (a *App) LinkRedirect(c echo.Context) error {
 
 	// If tracking is globally disabled, resolve the URL without recording a click.
 	if a.cfg.Privacy.DisableTracking {
-		url, err := a.core.GetLinkURL(linkUUID)
+		url, err := a.mailviewCore(c).GetLinkURL(linkUUID)
 		if err != nil {
 			e := err.(*echo.HTTPError)
 			return c.Render(e.Code, tplMessage, makeMsgTpl(a.i18n.T("public.errorTitle"), "", e.Error()))
@@ -573,7 +573,7 @@ func (a *App) LinkRedirect(c echo.Context) error {
 		subUUID = ""
 	}
 
-	url, err := a.core.RegisterCampaignLinkClick(linkUUID, campUUID, subUUID)
+	url, err := a.mailviewCore(c).RegisterCampaignLinkClick(linkUUID, campUUID, subUUID)
 	if err != nil {
 		e := err.(*echo.HTTPError)
 		return c.Render(e.Code, tplMessage, makeMsgTpl(a.i18n.T("public.errorTitle"), "", e.Error()))
@@ -602,7 +602,7 @@ func (a *App) RegisterCampaignView(c echo.Context) error {
 	// Exclude dummy hits from template previews.
 	campUUID := c.Param("campUUID")
 	if campUUID != dummyUUID && subUUID != dummyUUID {
-		if err := a.core.RegisterCampaignView(campUUID, subUUID); err != nil {
+		if err := a.mailviewCore(c).RegisterCampaignView(campUUID, subUUID); err != nil {
 			a.log.Printf("error registering campaign view: %s", err)
 		}
 	}
@@ -626,7 +626,7 @@ func (a *App) SelfExportSubscriberData(c echo.Context) error {
 	// list subscriptions, campaign views, and link clicks. Names of
 	// private lists are replaced with "Private list".
 	subUUID := c.Param("subUUID")
-	data, b, err := a.exportSubscriberData(0, subUUID, a.cfg.Privacy.Exportable)
+	data, b, err := a.exportSubscriberData(c, 0, subUUID, a.cfg.Privacy.Exportable)
 	if err != nil {
 		a.log.Printf("error exporting subscriber data: %s", err)
 		return c.Render(http.StatusInternalServerError, tplMessage,
@@ -679,7 +679,7 @@ func (a *App) WipeSubscriberData(c echo.Context) error {
 	}
 
 	subUUID := c.Param("subUUID")
-	if err := a.core.DeleteSubscribers(nil, []string{subUUID}); err != nil {
+	if err := a.mailviewCore(c).DeleteSubscribers(nil, []string{subUUID}); err != nil {
 		a.log.Printf("error wiping subscriber data: %s", err)
 		return c.Render(http.StatusInternalServerError, tplMessage,
 			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorProcessingRequest")))
@@ -760,7 +760,7 @@ func (a *App) processSubForm(c echo.Context) (bool, error) {
 	listUUIDs := pq.StringArray(req.FormListUUIDs)
 
 	// Fetch the list types and ensure that they are not private.
-	listTypes, err := a.core.GetListTypes(nil, req.FormListUUIDs)
+	listTypes, err := a.mailviewCore(c).GetListTypes(nil, req.FormListUUIDs)
 	if err != nil {
 		return false, echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("%s", err.(*echo.HTTPError).Message))
 	}
@@ -772,7 +772,7 @@ func (a *App) processSubForm(c echo.Context) (bool, error) {
 	}
 
 	// Insert the subscriber into the DB.
-	_, hasOptin, err := a.core.InsertSubscriber(models.Subscriber{
+	_, hasOptin, err := a.mailviewCore(c).InsertSubscriber(models.Subscriber{
 		Name:   req.Name,
 		Email:  req.Email,
 		Status: models.SubscriberStatusEnabled,
@@ -787,13 +787,13 @@ func (a *App) processSubForm(c echo.Context) (bool, error) {
 	// Subscriber already exists. Update subscriptions in the DB.
 	if e, ok := err.(*echo.HTTPError); ok && e.Code == http.StatusConflict {
 		// Get the subscriber from the DB by their email.
-		sub, err := a.core.GetSubscriber(0, "", req.Email)
+		sub, err := a.mailviewCore(c).GetSubscriber(0, "", req.Email)
 		if err != nil {
 			return false, err
 		}
 
 		// Update the subscriber's subscriptions in the DB.
-		_, hasOptin, err := a.core.UpdateSubscriberWithLists(sub.ID, sub, nil, listUUIDs, false, false, true, nil, true)
+		_, hasOptin, err := a.mailviewCore(c).UpdateSubscriberWithLists(sub.ID, sub, nil, listUUIDs, false, false, true, nil, true)
 		if err == nil {
 			return hasOptin, nil
 		}

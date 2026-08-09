@@ -8,7 +8,7 @@
     <section v-if="isFree()" class="wrap">
       <form @submit.prevent="onUpload" class="box">
         <div>
-          <div class="columns">
+          <div v-if="!isTenantImport" class="columns">
             <div class="column">
               <b-field :label="$t('import.mode')" :addons="false">
                 <div>
@@ -48,7 +48,7 @@
             </div>
           </div>
 
-          <div class="columns">
+          <div v-if="!isTenantImport" class="columns">
             <div class="column is-4">
               <b-field v-if="form.mode === 'subscribe'" :label="$t('import.overwriteUserInfo')"
                 :message="$t('import.overwriteUserInfoHelp')">
@@ -290,9 +290,11 @@ export default Vue.extend({
     },
 
     renderExample() {
-      const h = 'email,name,attributes\n'
-        + 'user1@mail.com,"User One","{""age"": 42, ""planet"": ""Mars""}"\n'
-        + 'user2@mail.com,"User Two","{""age"": 24, ""job"": ""Time Traveller""}"';
+      const h = this.isTenantImport
+        ? 'email,name\nuser1@mail.com,"User One"\nuser2@mail.com,"User Two"'
+        : 'email,name,attributes\n'
+          + 'user1@mail.com,"User One","{""age"": 42, ""planet"": ""Mars""}"\n'
+          + 'user2@mail.com,"User Two","{""age"": 24, ""job"": ""Time Traveller""}"';
 
       this.example = h;
     },
@@ -346,7 +348,11 @@ export default Vue.extend({
   },
 
   computed: {
-    ...mapState(['lists']),
+    ...mapState(['lists', 'profile']),
+
+    isTenantImport() {
+      return Boolean(this.profile && this.profile.mailviewTenantId);
+    },
 
     // Import progress bar value.
     progress() {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"database/sql"
 	"encoding/json"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/gdgvda/cron"
+	"github.com/gofrs/uuid/v5"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/types"
 	"github.com/knadh/goyesql/v2"
@@ -40,6 +42,7 @@ import (
 	"github.com/knadh/listmonk/internal/captcha"
 	"github.com/knadh/listmonk/internal/core"
 	"github.com/knadh/listmonk/internal/i18n"
+	"github.com/knadh/listmonk/internal/mailview/tenant"
 	"github.com/knadh/listmonk/internal/manager"
 	"github.com/knadh/listmonk/internal/media"
 	"github.com/knadh/listmonk/internal/media/providers/filesystem"
@@ -564,7 +567,7 @@ func initI18n(lang string, fs stuffbin.FileSystem) *i18n.I18n {
 }
 
 // initCore initializes the CRUD DB core .
-func initCore(fnNotify func(sub models.Subscriber, listIDs []int) (int, error), queries *models.Queries, db *sqlx.DB, i *i18n.I18n, ko *koanf.Koanf) *core.Core {
+func initCore(fnNotify func(sub models.Subscriber, listIDs []int) (int, error), fnScopedNotify func(*models.Queries, models.Subscriber, []int) (int, error), queries *models.Queries, db *sqlx.DB, i *i18n.I18n, ko *koanf.Koanf) *core.Core {
 	opt := &core.Opt{
 		Constants: core.Constants{
 			SendOptinConfirmation: ko.Bool("app.send_optin_confirmation"),
@@ -583,12 +586,13 @@ func initCore(fnNotify func(sub models.Subscriber, listIDs []int) (int, error), 
 
 	// Initialize the CRUD core.
 	return core.New(opt, &core.Hooks{
-		SendOptinConfirmation: fnNotify,
+		SendOptinConfirmation:       fnNotify,
+		SendOptinConfirmationScoped: fnScopedNotify,
 	})
 }
 
 // initCampaignManager initializes the campaign manager.
-func initCampaignManager(msgrs []manager.Messenger, q *models.Queries, u *UrlConfig, co *core.Core, md media.Store, i *i18n.I18n, ko *koanf.Koanf) *manager.Manager {
+func initCampaignManager(msgrs []manager.Messenger, q *models.Queries, u *UrlConfig, co *core.Core, md media.Store, db *sqlx.DB, i *i18n.I18n, ko *koanf.Koanf) *manager.Manager {
 	if ko.Bool("passive") {
 		lo.Println("running in passive mode. won't process campaigns.")
 	}
@@ -614,7 +618,7 @@ func initCampaignManager(msgrs []manager.Messenger, q *models.Queries, u *UrlCon
 		SlidingWindowRate:     ko.Int("app.message_sliding_window_rate"),
 		ScanInterval:          time.Second * 5,
 		ScanCampaigns:         !ko.Bool("passive"),
-	}, newManagerStore(q, co, md), i, lo)
+	}, newManagerStore(q, co, md, db), i, lo)
 
 	// Attach all messengers to the campaign manager.
 	for _, m := range msgrs {
@@ -880,6 +884,85 @@ func initBounceManager(cb func(models.Bounce) error, stmt *sqlx.Stmt, lo *log.Lo
 	return b
 }
 
+func makeTenantBounceRecorder(db *sqlx.DB, co *core.Core) func(models.Bounce) error {
+	return func(b models.Bounce) error {
+		var subUUID, campUUID *uuid.UUID
+		if b.SubscriberUUID != "" {
+			parsed, err := uuid.FromString(b.SubscriberUUID)
+			if err != nil {
+				return err
+			}
+			subUUID = &parsed
+		}
+		if b.CampaignUUID != "" {
+			parsed, err := uuid.FromString(b.CampaignUUID)
+			if err != nil {
+				return err
+			}
+			campUUID = &parsed
+		}
+		tenantID, err := resolveBounceTenant(db, subUUID, strings.TrimSpace(b.Email), campUUID)
+		if err != nil {
+			return err
+		}
+		ctx := tenant.WithContext(context.Background(), tenant.Context{TenantID: tenantID})
+		tx, _, err := tenant.Begin(ctx, db)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := co.WithTx(tx).RecordBounce(b); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+}
+
+func resolveBounceTenant(db *sqlx.DB, subUUID *uuid.UUID, email string, campUUID *uuid.UUID) (uuid.UUID, error) {
+	if subUUID == nil && campUUID == nil && email == "" {
+		return uuid.Nil, errors.New("bounce tenant identifiers are missing")
+	}
+	var tenantIDs []uuid.UUID
+	if err := db.Select(&tenantIDs, `SELECT id FROM mv_tenants WHERE status='active' OR id='00000000-0000-0000-0000-000000000001'`); err != nil {
+		return uuid.Nil, err
+	}
+	matches := make([]uuid.UUID, 0, 1)
+	for _, tenantID := range tenantIDs {
+		ctx := tenant.WithContext(context.Background(), tenant.Context{TenantID: tenantID})
+		tx, _, err := tenant.Begin(ctx, db)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		matched := true
+		if campUUID != nil {
+			if err := tx.Get(&matched, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE uuid=$1)`, *campUUID); err != nil {
+				_ = tx.Rollback()
+				return uuid.Nil, err
+			}
+		}
+		if matched && subUUID != nil {
+			if err := tx.Get(&matched, `SELECT EXISTS(SELECT 1 FROM subscribers WHERE uuid=$1)`, *subUUID); err != nil {
+				_ = tx.Rollback()
+				return uuid.Nil, err
+			}
+		}
+		if matched && email != "" {
+			if err := tx.Get(&matched, `SELECT EXISTS(SELECT 1 FROM subscribers WHERE lower(email)=lower($1))`, email); err != nil {
+				_ = tx.Rollback()
+				return uuid.Nil, err
+			}
+		}
+		_ = tx.Rollback()
+		if matched {
+			matches = append(matches, tenantID)
+		}
+	}
+	if len(matches) != 1 {
+		return uuid.Nil, errors.New("bounce tenant could not be resolved unambiguously")
+	}
+	return matches[0], nil
+}
+
 // initAbout initializes the app's /about API endpoint with the app and system info.
 func initAbout(q *models.Queries, db *sqlx.DB) about {
 	var (
@@ -964,9 +1047,9 @@ func initHTTPServer(cfg *Config, urlCfg *UrlConfig, i *i18n.I18n, fs stuffbin.Fi
 	)
 	switch {
 	case uploadProvider == "filesystem" && uploadFsURI != "":
-		srv.Static(uploadFsURI, ko.String("upload.filesystem.upload_path"))
+		srv.GET(path.Join(uploadFsURI, "/*"), app.mailviewPublicTenant(app.ServeMedia))
 	case uploadProvider == "s3" && strings.HasPrefix(publicURL, "/"):
-		srv.GET(path.Join(publicURL, "/:filepath"), app.ServeS3Media)
+		srv.GET(path.Join(publicURL, "/*"), app.mailviewPublicTenant(app.ServeMedia))
 	}
 
 	// Register all HTTP handlers.

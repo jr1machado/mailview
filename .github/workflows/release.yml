@@ -3,7 +3,7 @@ name: goreleaser
 on:
   push:
     tags:
-      - "v*" # Will trigger only if tag is pushed matching pattern `v*` (Eg: `v0.1.0`)
+      - "mailview-v*"
 
 permissions: write-all
 
@@ -48,7 +48,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "~> v2"
           args: release --parallelism 1 --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

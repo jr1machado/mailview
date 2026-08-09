@@ -58,7 +58,7 @@ var (
 
 // GetSubscriber handles the retrieval of a single subscriber by ID.
 func (a *App) GetSubscriber(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.read.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		out, err := a.dataplane.GetSubscriber(scoped, getID(c))
@@ -88,16 +88,18 @@ func (a *App) GetSubscriber(c echo.Context) error {
 
 // GetSubscriberActivity handles the retrieval of a subscriber's campaign views and link clicks.
 func (a *App) GetSubscriberActivity(c echo.Context) error {
-	user := auth.GetUser(c)
-
-	// Check if the user has access to at least one of the lists on the subscriber.
 	id := getID(c)
-	if err := a.hasSubPerm(user, []int{id}); err != nil {
-		return err
+	if c.Get("mailview_tenant_context") == nil {
+		// The tenant middleware has already checked subscriber.read.tenant and
+		// opened an RLS-scoped transaction. List-role checks only apply to the
+		// legacy workspace and would incorrectly query outside that transaction.
+		if err := a.hasSubPerm(auth.GetUser(c), []int{id}); err != nil {
+			return err
+		}
 	}
 
 	// Fetch the subscriber activity from the DB.
-	out, err := a.core.GetSubscriberActivity(id)
+	out, err := a.mailviewCore(c).GetSubscriberActivity(id)
 	if err != nil {
 		return err
 	}
@@ -107,7 +109,7 @@ func (a *App) GetSubscriberActivity(c echo.Context) error {
 
 // QuerySubscribers handles querying subscribers based on an arbitrary SQL expression.
 func (a *App) QuerySubscribers(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.read.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		res, err := a.dataplane.ListSubscribers(scoped)
@@ -166,7 +168,7 @@ func (a *App) QuerySubscribers(c echo.Context) error {
 
 // ExportSubscribers handles querying subscribers based on an arbitrary SQL expression.
 func (a *App) ExportSubscribers(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.export.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		rows, err := a.dataplane.ListSubscribers(scoped)
@@ -262,7 +264,7 @@ loop:
 
 // CreateSubscriber handles the creation of a new subscriber.
 func (a *App) CreateSubscriber(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		var in dataplane.CreateSubscriberInput
@@ -309,7 +311,7 @@ func (a *App) CreateSubscriber(c echo.Context) error {
 
 // UpdateSubscriber handles modification of a subscriber.
 func (a *App) UpdateSubscriber(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		var in struct {
@@ -385,6 +387,32 @@ func (a *App) UpdateSubscriber(c echo.Context) error {
 // PatchSubscriber handles partially modifying a subscriber.
 // Only fields present in the request body are updated.
 func (a *App) PatchSubscriber(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
+		return err
+	} else if scoped != nil {
+		current, err := a.dataplane.GetSubscriber(scoped, getID(c))
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		in := struct {
+			Email *string `json:"email"`
+			Name  *string `json:"name"`
+		}{}
+		if err := c.Bind(&in); err != nil {
+			return err
+		}
+		if in.Email != nil {
+			current.Email = *in.Email
+		}
+		if in.Name != nil {
+			current.Name = *in.Name
+		}
+		out, err := a.dataplane.UpdateSubscriber(scoped, current.ID, dataplane.CreateSubscriberInput{Email: current.Email, Name: current.Name})
+		if err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{out})
+	}
 	user := auth.GetUser(c)
 	id := getID(c)
 
@@ -453,21 +481,20 @@ func (a *App) PatchSubscriber(c echo.Context) error {
 
 // SubscriberSendOptin sends an optin confirmation e-mail to a subscriber.
 func (a *App) SubscriberSendOptin(c echo.Context) error {
-	user := auth.GetUser(c)
-
-	// Fetch the subscriber.
 	id := getID(c)
-	if err := a.hasSubPerm(user, []int{id}); err != nil {
-		return err
+	if c.Get("mailview_tenant_context") == nil {
+		if err := a.hasSubPerm(auth.GetUser(c), []int{id}); err != nil {
+			return err
+		}
 	}
 
-	out, err := a.core.GetSubscriber(id, "", "")
+	out, err := a.mailviewCore(c).GetSubscriber(id, "", "")
 	if err != nil {
 		return err
 	}
 
 	// Trigger the opt-in confirmation e-mail hook.
-	if _, err := a.fnOptinNotify(out, nil); err != nil {
+	if _, err := a.mailviewCore(c).SendOptinConfirmation(out, nil); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, a.i18n.T("subscribers.errorSendingOptin"))
 	}
 
@@ -476,6 +503,14 @@ func (a *App) SubscriberSendOptin(c echo.Context) error {
 
 // BlocklistSubscriber handles the blocklisting of a given subscriber.
 func (a *App) BlocklistSubscriber(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
+		return err
+	} else if scoped != nil {
+		if err := a.dataplane.BlocklistSubscribers(scoped, []int{getID(c)}); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{true})
+	}
 	user := auth.GetUser(c)
 
 	// Update the subscribers in the DB.
@@ -493,6 +528,18 @@ func (a *App) BlocklistSubscriber(c echo.Context) error {
 
 // BlocklistSubscribers handles the blocklisting of one or more subscribers.
 func (a *App) BlocklistSubscribers(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
+		return err
+	} else if scoped != nil {
+		var req subQueryReq
+		if err := c.Bind(&req); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		if err := a.dataplane.BlocklistSubscribers(scoped, req.SubscriberIDs); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{true})
+	}
 	user := auth.GetUser(c)
 
 	var req subQueryReq
@@ -521,6 +568,26 @@ func (a *App) BlocklistSubscribers(c echo.Context) error {
 // from or to one or more target lists.
 // It takes either an ID in the URI, or a list of IDs in the request body.
 func (a *App) ManageSubscriberLists(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
+		return err
+	} else if scoped != nil {
+		var req subQueryReq
+		if err := c.Bind(&req); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		ids := req.SubscriberIDs
+		if raw := c.Param("id"); raw != "" {
+			id, _ := strconv.Atoi(raw)
+			if id < 1 {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid subscriber id")
+			}
+			ids = []int{id}
+		}
+		if err := a.dataplane.ManageSubscriberLists(scoped, ids, req.TargetListIDs, req.Action, req.Status); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{true})
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -586,7 +653,7 @@ func (a *App) ManageSubscriberLists(c echo.Context) error {
 
 // DeleteSubscriber handles deletion of a single subscriber.
 func (a *App) DeleteSubscriber(c echo.Context) error {
-	if scoped, err := a.mailviewRequestContext(c); err != nil {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
 		return err
 	} else if scoped != nil {
 		if err := a.dataplane.DeleteSubscriber(scoped, getID(c)); err != nil {
@@ -611,6 +678,18 @@ func (a *App) DeleteSubscriber(c echo.Context) error {
 
 // DeleteSubscribers handles bulk deletion of one or more subscribers.
 func (a *App) DeleteSubscribers(c echo.Context) error {
+	if scoped, err := a.mailviewRequestContextFor(c, "subscriber.manage.tenant"); err != nil {
+		return err
+	} else if scoped != nil {
+		ids, err := parseStringIDs(c.Request().URL.Query()["id"])
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		if err := a.dataplane.DeleteSubscribers(scoped, ids); err != nil {
+			return dataplaneHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, okResp{true})
+	}
 	user := auth.GetUser(c)
 
 	// Multiple IDs.
@@ -639,6 +718,9 @@ func (a *App) DeleteSubscribers(c echo.Context) error {
 // DeleteSubscribersByQuery bulk deletes based on an
 // arbitrary SQL expression.
 func (a *App) DeleteSubscribersByQuery(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "arbitrary SQL expressions are disabled on the tenant Data Plane; use explicit subscriber ids")
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -679,6 +761,9 @@ func (a *App) DeleteSubscribersByQuery(c echo.Context) error {
 // BlocklistSubscribersByQuery bulk blocklists subscribers
 // based on an arbitrary SQL expression.
 func (a *App) BlocklistSubscribersByQuery(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "arbitrary SQL expressions are disabled on the tenant Data Plane; use explicit subscriber ids")
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -718,6 +803,9 @@ func (a *App) BlocklistSubscribersByQuery(c echo.Context) error {
 // ManageSubscriberListsByQuery bulk adds/removes/unsubscribes subscribers
 // from one or more lists based on an arbitrary SQL expression.
 func (a *App) ManageSubscriberListsByQuery(c echo.Context) error {
+	if c.Get("mailview_tenant_context") != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "arbitrary SQL expressions are disabled on the tenant Data Plane; use explicit subscriber ids")
+	}
 	// Get the authenticated user.
 	user := auth.GetUser(c)
 
@@ -769,13 +857,14 @@ func (a *App) ManageSubscriberListsByQuery(c echo.Context) error {
 func (a *App) DeleteSubscriberBounces(c echo.Context) error {
 	id := getID(c)
 
-	// Check if the user has access to at least one of the lists on the subscriber.
-	if err := a.hasSubPerm(auth.GetUser(c), []int{id}); err != nil {
-		return err
+	if c.Get("mailview_tenant_context") == nil {
+		if err := a.hasSubPerm(auth.GetUser(c), []int{id}); err != nil {
+			return err
+		}
 	}
 
 	// Delete the bounces from the DB.
-	if err := a.core.DeleteSubscriberBounces(id, ""); err != nil {
+	if err := a.mailviewCore(c).DeleteSubscriberBounces(id, ""); err != nil {
 		return err
 	}
 
@@ -792,12 +881,13 @@ func (a *App) ExportSubscriberData(c echo.Context) error {
 	// private lists are replaced with "Private list".
 	id := getID(c)
 
-	// Check if the user has access to at least one of the lists on the subscriber.
-	if err := a.hasSubPerm(auth.GetUser(c), []int{id}); err != nil {
-		return err
+	if c.Get("mailview_tenant_context") == nil {
+		if err := a.hasSubPerm(auth.GetUser(c), []int{id}); err != nil {
+			return err
+		}
 	}
 
-	_, b, err := a.exportSubscriberData(id, "", a.cfg.Privacy.Exportable)
+	_, b, err := a.exportSubscriberData(c, id, "", a.cfg.Privacy.Exportable)
 	if err != nil {
 		a.log.Printf("error exporting subscriber data: %s", err)
 		return echo.NewHTTPError(http.StatusInternalServerError,
@@ -814,8 +904,8 @@ func (a *App) ExportSubscriberData(c echo.Context) error {
 // subscriptions, campaign_views, link_clicks (if they're enabled in the config)
 // and returns a formatted, indented JSON payload. Either takes a numeric id
 // and an empty subUUID or takes 0 and a string subUUID.
-func (a *App) exportSubscriberData(id int, subUUID string, exportables map[string]bool) (models.SubscriberExportProfile, []byte, error) {
-	data, err := a.core.GetSubscriberProfileForExport(id, subUUID)
+func (a *App) exportSubscriberData(c echo.Context, id int, subUUID string, exportables map[string]bool) (models.SubscriberExportProfile, []byte, error) {
+	data, err := a.mailviewCore(c).GetSubscriberProfileForExport(id, subUUID)
 	if err != nil {
 		return data, nil, err
 	}

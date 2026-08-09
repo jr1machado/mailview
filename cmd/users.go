@@ -230,6 +230,23 @@ func (a *App) GetUserProfile(c echo.Context) error {
 	// Blank out the password hash in the response.
 	user.Password.String = ""
 	user.Password.Valid = false
+	if a.tenantRoutingEnabled {
+		if tenantRecord, err := a.resolveMailviewTenantHost(c.Request().Context(), c.Request().Host); err == nil {
+			perms, err := a.mailview.ListTenantPermissions(c.Request().Context(), tenantRecord.ID, user.ID)
+			if err != nil {
+				return err
+			}
+			user.MailViewTenantID = tenantRecord.ID.String()
+			user.MailViewPermissions = perms
+		}
+	}
+	if user.MailViewTenantID == "" {
+		perms, err := a.mailview.ListPlatformPermissions(c.Request().Context(), user.ID)
+		if err != nil {
+			return err
+		}
+		user.MailViewPlatformPermissions = perms
+	}
 
 	return c.JSON(http.StatusOK, okResp{user})
 }

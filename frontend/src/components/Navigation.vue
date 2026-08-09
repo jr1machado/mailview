@@ -63,6 +63,11 @@
       <b-menu-item v-if="$can('settings:get')" :to="{ name: 'logs' }" tag="router-link" :active="activeItem.logs"
         data-cy="logs" icon="format-list-bulleted-square" :label="$t('menu.logs')" />
     </b-menu-item><!-- settings -->
+
+    <b-menu-item v-if="$canPlatform('tenant.manage.platform', 'platform.roles.manage', 'support.impersonate.platform')"
+      :to="{ name: 'mailviewTenants' }"
+      tag="router-link" :active="activeItem.mailviewTenants" data-cy="mailview-tenants" icon="domain"
+      label="MailView Tenants" /><!-- MailView platform admin -->
   </b-menu-list>
 </template>
 

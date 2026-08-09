@@ -25,6 +25,23 @@ jobs:
       - name: Build backend
         run: make build
 
+  frontend-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint
+      - run: yarn build
+
   security-baseline:
     runs-on: ubuntu-latest
     steps:
@@ -53,6 +70,7 @@ jobs:
           mkdir -p deploy/secrets
           : > deploy/secrets/postgres-user
           : > deploy/secrets/postgres-password
-          : > deploy/secrets/postgres-db
-          : > deploy/secrets/database-url
+          : > deploy/secrets/app-db-password
+          : > deploy/secrets/mfa-encryption-key
+          : > deploy/secrets/import-signing-key
           docker compose --env-file deploy/.env.example -f deploy/compose.production.yml config --quiet
