@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrMFANotRecent  = errors.New("actor must have verified TOTP recently to start impersonation")
-	ErrGrantExpired  = errors.New("impersonation grant has expired or was revoked")
-	ErrGrantNotOwned = errors.New("impersonation grant does not belong to the calling user")
+	ErrMFANotRecent         = errors.New("actor must have verified TOTP recently to start impersonation")
+	ErrGrantExpired         = errors.New("impersonation grant has expired or was revoked")
+	ErrGrantNotOwned        = errors.New("impersonation grant does not belong to the calling user")
+	ErrGrantPendingApproval = errors.New("impersonation grant is pending independent approval")
 )
 
 // mfaRecencyWindow bounds how long ago the actor's last successful TOTP
@@ -29,23 +30,25 @@ const (
 )
 
 type ImpersonationGrant struct {
-	ID           uuid.UUID  `db:"id" json:"id"`
-	TenantID     uuid.UUID  `db:"tenant_id" json:"tenant_id"`
-	ActorUserID  int        `db:"actor_user_id" json:"actor_user_id"`
-	TargetUserID int        `db:"target_user_id" json:"target_user_id"`
-	Reason       string     `db:"reason" json:"reason"`
-	ApprovedBy   *int       `db:"approved_by" json:"approved_by,omitempty"`
-	ExpiresAt    time.Time  `db:"expires_at" json:"expires_at"`
-	RevokedAt    *time.Time `db:"revoked_at" json:"revoked_at,omitempty"`
-	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	ID               uuid.UUID  `db:"id" json:"id"`
+	TenantID         uuid.UUID  `db:"tenant_id" json:"tenant_id"`
+	ActorUserID      int        `db:"actor_user_id" json:"actor_user_id"`
+	TargetUserID     int        `db:"target_user_id" json:"target_user_id"`
+	Reason           string     `db:"reason" json:"reason"`
+	ApprovedBy       *int       `db:"approved_by" json:"approved_by,omitempty"`
+	ApprovalRequired bool       `db:"approval_required" json:"approval_required"`
+	ApprovedAt       *time.Time `db:"approved_at" json:"approved_at,omitempty"`
+	ExpiresAt        time.Time  `db:"expires_at" json:"expires_at"`
+	RevokedAt        *time.Time `db:"revoked_at" json:"revoked_at,omitempty"`
+	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
 }
 
 type StartImpersonationInput struct {
-	TenantID     uuid.UUID  `json:"tenant_id"`
-	TargetUserID int        `json:"target_user_id"`
-	Reason       string     `json:"reason"`
-	TTLMinutes   int        `json:"ttl_minutes"`
-	ApprovedBy   *int       `json:"approved_by,omitempty"`
+	TenantID        uuid.UUID `json:"tenant_id"`
+	TargetUserID    int       `json:"target_user_id"`
+	Reason          string    `json:"reason"`
+	TTLMinutes      int       `json:"ttl_minutes"`
+	RequireApproval bool      `json:"require_approval"`
 }
 
 // StartImpersonation opens a time-boxed, tenant-data-scoped grant letting
@@ -93,16 +96,42 @@ func (s *Service) StartImpersonation(ctx context.Context, actorUserID int, in St
 
 	out := ImpersonationGrant{
 		ID: uuid.Must(uuid.NewV4()), TenantID: in.TenantID, ActorUserID: actorUserID, TargetUserID: in.TargetUserID,
-		Reason: reason, ApprovedBy: in.ApprovedBy,
+		Reason: reason, ApprovalRequired: in.RequireApproval,
 	}
 	if err := tx.GetContext(ctx, &out, `
-INSERT INTO mv_impersonation_grants (id, tenant_id, actor_user_id, target_user_id, reason, approved_by, expires_at)
+INSERT INTO mv_impersonation_grants (id, tenant_id, actor_user_id, target_user_id, reason, approval_required, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)
-RETURNING id, tenant_id, actor_user_id, target_user_id, reason, approved_by, expires_at, revoked_at, created_at`,
-		out.ID, out.TenantID, out.ActorUserID, out.TargetUserID, out.Reason, out.ApprovedBy, ttl.String()); err != nil {
+RETURNING id, tenant_id, actor_user_id, target_user_id, reason, approved_by, approval_required, approved_at, expires_at, revoked_at, created_at`,
+		out.ID, out.TenantID, out.ActorUserID, out.TargetUserID, out.Reason, out.ApprovalRequired, ttl.String()); err != nil {
 		return ImpersonationGrant{}, err
 	}
 	if err := appendAudit(ctx, tx, &in.TenantID, actor, "impersonation.start", "user", strconv.Itoa(in.TargetUserID), "success", reason, map[string]any{"grant_id": out.ID.String(), "ttl_minutes": in.TTLMinutes}); err != nil {
+		return ImpersonationGrant{}, err
+	}
+	return out, tx.Commit()
+}
+
+// ApproveImpersonation is deliberately separate from creation and rejects
+// self-approval. Deployments that do not require four-eyes approval leave
+// RequireApproval false and grants become usable immediately.
+func (s *Service) ApproveImpersonation(ctx context.Context, grantID uuid.UUID, approverUserID int, actor Actor) (ImpersonationGrant, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return ImpersonationGrant{}, err
+	}
+	defer tx.Rollback()
+	var out ImpersonationGrant
+	if err := tx.GetContext(ctx, &out, `
+UPDATE mv_impersonation_grants SET approved_by=$2,approved_at=now()
+WHERE id=$1 AND approval_required AND approved_at IS NULL AND actor_user_id<>$2
+ AND revoked_at IS NULL AND expires_at>now()
+RETURNING id,tenant_id,actor_user_id,target_user_id,reason,approved_by,approval_required,approved_at,expires_at,revoked_at,created_at`, grantID, approverUserID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ImpersonationGrant{}, ErrInvalid
+		}
+		return ImpersonationGrant{}, err
+	}
+	if err := appendAudit(ctx, tx, &out.TenantID, actor, "impersonation.approve", "user", strconv.Itoa(out.TargetUserID), "success", out.Reason, map[string]any{"grant_id": out.ID.String()}); err != nil {
 		return ImpersonationGrant{}, err
 	}
 	return out, tx.Commit()
@@ -122,7 +151,7 @@ func (s *Service) RevokeImpersonation(ctx context.Context, grantID uuid.UUID, ac
 	if err := tx.GetContext(ctx, &out, `
 UPDATE mv_impersonation_grants SET revoked_at = now()
 WHERE id = $1 AND revoked_at IS NULL
-RETURNING id, tenant_id, actor_user_id, target_user_id, reason, approved_by, expires_at, revoked_at, created_at`, grantID); err != nil {
+RETURNING id, tenant_id, actor_user_id, target_user_id, reason, approved_by, approval_required, approved_at, expires_at, revoked_at, created_at`, grantID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ImpersonationGrant{}, ErrNotFound
 		}
@@ -140,7 +169,7 @@ RETURNING id, tenant_id, actor_user_id, target_user_id, reason, approved_by, exp
 func (s *Service) ListImpersonationGrants(ctx context.Context) ([]ImpersonationGrant, error) {
 	out := []ImpersonationGrant{}
 	err := s.db.SelectContext(ctx, &out, `
-SELECT id, tenant_id, actor_user_id, target_user_id, reason, approved_by, expires_at, revoked_at, created_at
+SELECT id, tenant_id, actor_user_id, target_user_id, reason, approved_by, approval_required, approved_at, expires_at, revoked_at, created_at
 FROM mv_impersonation_grants ORDER BY created_at DESC LIMIT 200`)
 	return out, err
 }
@@ -152,7 +181,7 @@ FROM mv_impersonation_grants ORDER BY created_at DESC LIMIT 200`)
 func (s *Service) ValidateImpersonationGrant(ctx context.Context, grantID uuid.UUID, actorUserID int) (ImpersonationGrant, error) {
 	var out ImpersonationGrant
 	err := s.db.GetContext(ctx, &out, `
-SELECT id, tenant_id, actor_user_id, target_user_id, reason, approved_by, expires_at, revoked_at, created_at
+SELECT id, tenant_id, actor_user_id, target_user_id, reason, approved_by, approval_required, approved_at, expires_at, revoked_at, created_at
 FROM mv_impersonation_grants WHERE id = $1`, grantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ImpersonationGrant{}, ErrNotFound
@@ -165,6 +194,9 @@ FROM mv_impersonation_grants WHERE id = $1`, grantID)
 	}
 	if out.RevokedAt != nil || time.Now().After(out.ExpiresAt) {
 		return ImpersonationGrant{}, ErrGrantExpired
+	}
+	if out.ApprovalRequired && out.ApprovedAt == nil {
+		return ImpersonationGrant{}, ErrGrantPendingApproval
 	}
 	return out, nil
 }

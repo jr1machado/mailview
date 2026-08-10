@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/jmoiron/sqlx"
 	"github.com/knadh/listmonk/internal/mailview/migrations"
+	mvtenant "github.com/knadh/listmonk/internal/mailview/tenant"
 	_ "github.com/lib/pq"
 )
 
@@ -45,7 +47,7 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 	svc := New(db)
 	actor := Actor{UserID: 201, RequestID: "test-request"}
 
-	tenant, err := svc.CreateTenant(ctx, CreateTenantInput{Slug: "acme-rbac", Name: "Acme RBAC", OwnerUserID: 201}, actor)
+	tenant, err := svc.CreateTenant(ctx, CreateTenantInput{Slug: fmt.Sprintf("acme-rbac-%d", time.Now().UnixNano()), Name: "Acme RBAC", OwnerUserID: 201}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +106,54 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 		t.Fatal("custom role should not be marked system")
 	}
 
+	// --- API keys: plaintext returned once, only a digest is persisted ---
+	tenantCtx := mvtenant.WithContext(ctx, mvtenant.Context{TenantID: tenant.ID, UserID: 201, RequestID: "phase4-test"})
+	createdKey, err := svc.CreateAPIKey(tenantCtx, CreateAPIKeyInput{Name: "automation", Permissions: []string{"campaign.read.tenant"}}, actor)
+	if err != nil || createdKey.Token == "" {
+		t.Fatalf("CreateAPIKey: %#v, %v", createdKey, err)
+	}
+	tx, _, err := mvtenant.Begin(tenantCtx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedHash string
+	if err := tx.GetContext(ctx, &storedHash, `SELECT secret_hash FROM mv_api_keys WHERE id=$1`, createdKey.ID); err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.Rollback()
+	if storedHash == createdKey.Token || len(storedHash) != 64 {
+		t.Fatalf("API key was not stored as a SHA-256 digest: %q", storedHash)
+	}
+
+	// --- Campaign approval state machine and idempotent scheduling ---
+	tx, _, err = mvtenant.Begin(tenantCtx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var campaignID int
+	if err := tx.GetContext(ctx, &campaignID, `INSERT INTO campaigns(uuid,name,subject,from_email,body,messenger)
+	 VALUES(gen_random_uuid(),'Phase 4','Subject','sender@example.test','Body','email') RETURNING id`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	transition := func(to, key string, scheduledAt *time.Time) CampaignWorkflow {
+		out, err := svc.TransitionCampaign(tenantCtx, campaignID, CampaignTransitionInput{ToState: to, IdempotencyKey: key, ScheduledAt: scheduledAt}, actor)
+		if err != nil {
+			t.Fatalf("transition to %s: %v", to, err)
+		}
+		return out
+	}
+	transition(CampaignStateReview, "phase4-review-1", nil)
+	transition(CampaignStateApproved, "phase4-approve-1", nil)
+	scheduledAt := time.Now().Add(time.Hour)
+	scheduled := transition(CampaignStateScheduled, "phase4-schedule-1", &scheduledAt)
+	retry := transition(CampaignStateScheduled, "phase4-schedule-1", &scheduledAt)
+	if retry.Revision != scheduled.Revision || retry.State != CampaignStateScheduled {
+		t.Fatalf("idempotent retry changed workflow: before=%#v after=%#v", scheduled, retry)
+	}
+
 	// --- Admin ops ---
 	dash, err := svc.GetPlatformDashboard(ctx)
 	if err != nil || dash.TenantsActive < 1 {
@@ -159,8 +209,25 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 		t.Fatalf("expected ErrGrantExpired after revoke, got %v", err)
 	}
 
+	pending, err := svc.StartImpersonation(ctx, 201, StartImpersonationInput{TenantID: tenant.ID, TargetUserID: 202, Reason: "four eyes support ticket #456", TTLMinutes: 15, RequireApproval: true}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ValidateImpersonationGrant(ctx, pending.ID, 201); err != ErrGrantPendingApproval {
+		t.Fatalf("expected pending approval, got %v", err)
+	}
+	if _, err := svc.ApproveImpersonation(ctx, pending.ID, 201, actor); err != ErrInvalid {
+		t.Fatalf("self approval should fail, got %v", err)
+	}
+	if _, err := svc.ApproveImpersonation(ctx, pending.ID, 202, Actor{UserID: 202}); err != nil {
+		t.Fatalf("independent approval: %v", err)
+	}
+	if _, err := svc.ValidateImpersonationGrant(ctx, pending.ID, 201); err != nil {
+		t.Fatalf("approved grant should validate: %v", err)
+	}
+
 	grants, err := svc.ListImpersonationGrants(ctx)
-	if err != nil || len(grants) != 1 {
+	if err != nil || len(grants) != 2 {
 		t.Fatalf("ListImpersonationGrants = %d, %v", len(grants), err)
 	}
 }

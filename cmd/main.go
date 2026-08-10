@@ -262,7 +262,8 @@ func main() {
 		}
 	}
 
-	if err := mvcontrol.New(db).EnsureNoBypassRLS(context.Background()); err != nil {
+	mailviewControl := mvcontrol.New(db)
+	if err := mailviewControl.EnsureNoBypassRLS(context.Background()); err != nil {
 		lo.Fatalf("MailView tenant isolation check failed: %v", err)
 	}
 
@@ -316,7 +317,7 @@ func main() {
 		log:                  lo,
 		events:               evStream,
 		bufLog:               bufLog,
-		mailview:             mvcontrol.New(db),
+		mailview:             mailviewControl,
 		dataplane:            dataplane.New(db),
 		importJobs:           importJobs,
 		tenantBaseDomain:     strings.ToLower(strings.TrimSpace(ko.String("mailview.tenant_base_domain"))),
@@ -339,6 +340,27 @@ func main() {
 		// If there are no users, then the app needs to prompt for new user setup.
 		needsUserSetup: !hasUsers,
 	}
+
+	// Revalidate custom host ownership periodically. DNS loss immediately
+	// removes a hostname from routing and revokes its certificate state.
+	domainRevalidationInterval := ko.Duration("mailview.domain_revalidation_interval")
+	if domainRevalidationInterval <= 0 {
+		domainRevalidationInterval = 24 * time.Hour
+	}
+	go func() {
+		ticker := time.NewTicker(domainRevalidationInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			checked, err := mailviewControl.RevalidateDueDomains(context.Background(), mvcontrol.Actor{RequestID: "domain-revalidation"}, 100)
+			if err != nil {
+				lo.Printf("MailView domain revalidation failed: %v", err)
+				continue
+			}
+			if checked > 0 {
+				lo.Printf("MailView revalidated %d tenant domains", checked)
+			}
+		}
+	}()
 
 	// Star the update checker.
 	if ko.Bool("app.check_updates") {

@@ -1,4 +1,4 @@
-# Deploy de produção do MailView v0.4.0
+# Deploy de produção do MailView v0.5.0
 
 A topologia fornecida executa Caddy (80/443), o binário monolítico MailView (9000 interno) e PostgreSQL (5432 interno). Frontend e workers estão no binário; não há Redis.
 
@@ -15,7 +15,7 @@ docker compose --env-file .env -f compose.production.yml config
 docker compose --env-file .env -f compose.production.yml up -d
 ```
 
-Edite `.env`: `MAILVIEW_IMAGE` deve ser imagem MailView com tag imutável e `MAILVIEW_PUBLIC_HOST` deve possuir DNS apontando para o proxy. O Caddy emite TLS do host principal. Domínios de tenant adicionais exigem configuração operacional de DNS/proxy; a verificação do app é manual nesta versão.
+Edite `.env`: `MAILVIEW_IMAGE` deve ser imagem MailView com tag imutável e `MAILVIEW_PUBLIC_HOST` deve possuir DNS apontando para o proxy. O Caddy emite TLS do host principal. Domínios de tenant adicionais exigem configuração operacional de DNS/proxy; o MailView automatiza a consulta DNS de propriedade, mas o provisionamento do registro e do certificado no proxy continua externo.
 
 Na primeira criação do volume, `db-init/02-mailview-app-role.sh` cria `mailview_app` como `NOBYPASSRLS`. Alterar secrets depois não executa novamente o init; rotacione a senha também no PostgreSQL.
 

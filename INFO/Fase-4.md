@@ -1,3 +1,25 @@
+# Fase 4 — implementação
+
+Status em `feature/sprint03`: implementada sobre as fundações da Fase 3.
+
+- RBAC tenant e plataforma com catálogo fixo, papéis padrão, grants aditivos,
+  negação explícita prevalente, papéis customizados por plano e invalidação de
+  sessões em mudanças sensíveis;
+- dashboard global e home tenant calculados com isolamento RLS;
+- gestão de tenant, quotas, ownership, infraestrutura dedicada, auditoria e
+  impersonation com MFA recente, TTL, justificativa, aprovação independente
+  opcional, banner e exclusão de billing/segredos;
+- workflow de campanha concorrente e idempotente:
+  `draft -> review -> approved -> scheduled -> sending -> completed`, com
+  rejeição e cancelamento auditados;
+- contatos continuam deduplicados por `(tenant_id, email)` e recebem tags,
+  consentimento e supressão nativos, preservando `attributes` como campos
+  customizados;
+- API keys retornadas uma única vez e persistidas somente como hash; segredos
+  TOTP e credenciais SMTP usam ciphertext/referência externa versionada;
+- TLS 1.2/1.3, HSTS e cabeçalhos defensivos no proxy de produção;
+- migration 13 validada em PostgreSQL 17 com role `NOBYPASSRLS`.
+
 # 10. RBAC
 
 ## 10.1 Papéis padrão do tenant

@@ -26,7 +26,7 @@ services:
     hostname: mailview.example.com                           # Recommend using FQDN for hostname
     depends_on:
       - db
-    command: [sh, -c, "./mailview --install --idempotent --yes --config '' && ./mailview --upgrade --yes --config '' && ./mailview --config ''"]
+    command: [sh, -c, "./MailView --install --idempotent --yes --config '' && ./MailView --upgrade --yes --config '' && ./MailView --config ''"]
                                                               # --config (file) param is set to empty so that listmonk only uses the env vars (below) for config.
                                                               # --install --idempotent ensures that DB installation happens only once on an empty DB, on the first ever start.
                                                               # --upgrade automatically runs any DB migrations when a new image is pulled.
@@ -49,6 +49,7 @@ services:
       LISTMONK_mailview__import_signing_key: ${MAILVIEW_IMPORT_SIGNING_KEY:-}       # base64, 32 bytes decoded. Empty disables tenant CSV import (Fase-1).
       LISTMONK_mailview__tenant_routing_enabled: ${MAILVIEW_TENANT_ROUTING_ENABLED:-false}
       LISTMONK_mailview__tenant_base_domain: ${MAILVIEW_TENANT_BASE_DOMAIN:-}       # e.g. mailview.example.com for {slug}.mailview.example.com routing.
+      LISTMONK_mailview__domain_revalidation_interval: ${MAILVIEW_DOMAIN_REVALIDATION_INTERVAL:-24h}
       LISTMONK_mailview__import_storage_dir: /mailview/imports
     volumes:
       - ./uploads:/mailview/uploads:rw                        # Configure Admin -> Settings -> Media with /mailview/uploads.

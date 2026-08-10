@@ -6,6 +6,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,19 +31,33 @@ var validDomainPurpose = map[string]struct{}{
 	"portal": {}, "tracking": {}, "sending": {}, "return_path": {}, "public_forms": {},
 }
 
+var hostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+const tenantDomainColumns = `id, tenant_id, hostname, purpose, verification_method, verification_token,
+verification_name, verification_value, status, tls_status, last_verified_at, last_checked_at,
+next_check_at, failure_reason, certificate_ref, certificate_revoked_at, owner_user_id, created_by, created_at, updated_at`
+
 type TenantDomain struct {
-	ID                 uuid.UUID  `db:"id" json:"id"`
-	TenantID           uuid.UUID  `db:"tenant_id" json:"tenant_id"`
-	Hostname           string     `db:"hostname" json:"hostname"`
-	Purpose            string     `db:"purpose" json:"purpose"`
-	VerificationMethod string     `db:"verification_method" json:"verification_method"`
-	VerificationToken  string     `db:"verification_token" json:"verification_token"`
-	Status             string     `db:"status" json:"status"`
-	TLSStatus          string     `db:"tls_status" json:"tls_status"`
-	LastVerifiedAt     *time.Time `db:"last_verified_at" json:"last_verified_at,omitempty"`
-	CreatedBy          int        `db:"created_by" json:"created_by"`
-	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt          time.Time  `db:"updated_at" json:"updated_at"`
+	ID                   uuid.UUID  `db:"id" json:"id"`
+	TenantID             uuid.UUID  `db:"tenant_id" json:"tenant_id"`
+	Hostname             string     `db:"hostname" json:"hostname"`
+	Purpose              string     `db:"purpose" json:"purpose"`
+	VerificationMethod   string     `db:"verification_method" json:"verification_method"`
+	VerificationToken    string     `db:"verification_token" json:"verification_token"`
+	VerificationName     string     `db:"verification_name" json:"verification_name"`
+	VerificationValue    string     `db:"verification_value" json:"verification_value"`
+	Status               string     `db:"status" json:"status"`
+	TLSStatus            string     `db:"tls_status" json:"tls_status"`
+	LastVerifiedAt       *time.Time `db:"last_verified_at" json:"last_verified_at,omitempty"`
+	LastCheckedAt        *time.Time `db:"last_checked_at" json:"last_checked_at,omitempty"`
+	NextCheckAt          *time.Time `db:"next_check_at" json:"next_check_at,omitempty"`
+	FailureReason        string     `db:"failure_reason" json:"failure_reason,omitempty"`
+	CertificateRef       string     `db:"certificate_ref" json:"certificate_ref,omitempty"`
+	CertificateRevokedAt *time.Time `db:"certificate_revoked_at" json:"certificate_revoked_at,omitempty"`
+	OwnerUserID          int        `db:"owner_user_id" json:"owner_user_id"`
+	CreatedBy            int        `db:"created_by" json:"created_by"`
+	CreatedAt            time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt            time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type CreateTenantDomainInput struct {
@@ -49,12 +66,11 @@ type CreateTenantDomainInput struct {
 	VerificationMethod string `json:"verification_method"`
 }
 
-// CreateTenantDomain registers a hostname pending DNS verification. It never
-// activates the domain: verification, TLS issuance and periodic revalidation
-// are operational steps outside this scope, tracked by status/tls_status.
+// CreateTenantDomain registers a hostname pending DNS verification and returns
+// the server-generated TXT/CNAME challenge. Creation never activates routing.
 func (s *Service) CreateTenantDomain(ctx context.Context, tenantID uuid.UUID, in CreateTenantDomainInput, actor Actor) (TenantDomain, error) {
 	hostname := strings.ToLower(strings.TrimSpace(in.Hostname))
-	if len(hostname) < 3 || len(hostname) > 255 || strings.Contains(hostname, " ") {
+	if !validTenantHostname(hostname) {
 		return TenantDomain{}, ErrInvalid
 	}
 	if _, ok := validDomainPurpose[in.Purpose]; !ok {
@@ -89,16 +105,26 @@ func (s *Service) CreateTenantDomain(ctx context.Context, tenantID uuid.UUID, in
 	if !tenantExists {
 		return TenantDomain{}, ErrNotFound
 	}
+	var ownerUserID int
+	if err := tx.GetContext(ctx, &ownerUserID, `SELECT m.user_id FROM mv_memberships m
+		JOIN mv_membership_roles mr ON mr.membership_id=m.id JOIN mv_roles r ON r.id=mr.role_id
+		WHERE m.tenant_id=$1 AND m.status='active' AND r.name='Tenant Owner' ORDER BY m.created_at LIMIT 1`, tenantID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TenantDomain{}, ErrInvalid
+		}
+		return TenantDomain{}, err
+	}
 
 	out := TenantDomain{
 		ID: uuid.Must(uuid.NewV4()), TenantID: tenantID, Hostname: hostname, Purpose: in.Purpose,
-		VerificationMethod: method, VerificationToken: token, Status: "pending", TLSStatus: "none", CreatedBy: actor.UserID,
+		VerificationMethod: method, VerificationToken: token, Status: "pending", TLSStatus: "none", CreatedBy: actor.UserID, OwnerUserID: ownerUserID,
 	}
+	out.VerificationName, out.VerificationValue = domainVerificationRecord(out)
 	if err := tx.GetContext(ctx, &out, `
-INSERT INTO mv_tenant_domains (id, tenant_id, hostname, purpose, verification_method, verification_token, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, hostname, purpose, verification_method, verification_token, status, tls_status, last_verified_at, created_by, created_at, updated_at`,
-		out.ID, out.TenantID, out.Hostname, out.Purpose, out.VerificationMethod, out.VerificationToken, out.CreatedBy); err != nil {
+INSERT INTO mv_tenant_domains (id, tenant_id, hostname, purpose, verification_method, verification_token, verification_name, verification_value, created_by, owner_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING `+tenantDomainColumns,
+		out.ID, out.TenantID, out.Hostname, out.Purpose, out.VerificationMethod, out.VerificationToken, out.VerificationName, out.VerificationValue, out.CreatedBy, out.OwnerUserID); err != nil {
 		if isUniqueViolation(err) {
 			return TenantDomain{}, ErrConflict
 		}
@@ -121,7 +147,7 @@ func (s *Service) ListTenantDomains(ctx context.Context, tenantID uuid.UUID) ([]
 	}
 	out := []TenantDomain{}
 	if err := tx.SelectContext(ctx, &out, `
-SELECT id, tenant_id, hostname, purpose, verification_method, verification_token, status, tls_status, last_verified_at, created_by, created_at, updated_at
+SELECT `+tenantDomainColumns+`
 FROM mv_tenant_domains WHERE tenant_id = $1 ORDER BY created_at ASC`, tenantID); err != nil {
 		return nil, err
 	}
@@ -169,18 +195,65 @@ WHERE d.hostname=$1 AND d.status='verified' AND t.status='active'`, hostname)
 	return Tenant{}, ErrNotFound
 }
 
-// MarkTenantDomainVerified records a manual verification decision. There is
-// no DNS lookup here: an operator confirms the CNAME/TXT record out of band
-// and this just flips the status the rest of the system relies on.
+// MarkTenantDomainVerified verifies the live DNS record before activation.
+// The historical name is retained for API compatibility.
 func (s *Service) MarkTenantDomainVerified(ctx context.Context, tenantID, domainID uuid.UUID, actor Actor) (TenantDomain, error) {
-	return s.updateTenantDomainStatus(ctx, tenantID, domainID, "verified", actor, "tenant_domain.verify")
+	return s.VerifyTenantDomainDNS(ctx, tenantID, domainID, actor)
 }
 
 func (s *Service) RevokeTenantDomain(ctx context.Context, tenantID, domainID uuid.UUID, actor Actor) (TenantDomain, error) {
-	return s.updateTenantDomainStatus(ctx, tenantID, domainID, "revoked", actor, "tenant_domain.revoke")
+	return s.updateTenantDomainStatus(ctx, tenantID, domainID, "revoked", actor, "tenant_domain.revoke", "ownership revoked")
 }
 
-func (s *Service) updateTenantDomainStatus(ctx context.Context, tenantID, domainID uuid.UUID, status string, actor Actor, action string) (TenantDomain, error) {
+// SetTenantDomainTLSStatus is called by the certificate controller. An issued
+// certificate is accepted only for a DNS-verified hostname; revocation clears
+// the certificate reference and timestamps the action.
+func (s *Service) SetTenantDomainTLSStatus(ctx context.Context, tenantID, domainID uuid.UUID, status, certificateRef string, actor Actor) (TenantDomain, error) {
+	status = strings.TrimSpace(status)
+	certificateRef = strings.TrimSpace(certificateRef)
+	if status != "pending" && status != "issued" && status != "failed" && status != "revoked" {
+		return TenantDomain{}, ErrInvalid
+	}
+	if status == "issued" && certificateRef == "" {
+		return TenantDomain{}, ErrInvalid
+	}
+	if status == "issued" {
+		domain, err := s.getTenantDomain(ctx, tenantID, domainID)
+		if err != nil {
+			return TenantDomain{}, err
+		}
+		if domain.Status != "verified" {
+			return TenantDomain{}, ErrInvalid
+		}
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return TenantDomain{}, err
+	}
+	defer tx.Rollback()
+	if err := setTenantScope(ctx, tx, tenantID); err != nil {
+		return TenantDomain{}, err
+	}
+	var out TenantDomain
+	err = tx.GetContext(ctx, &out, `UPDATE mv_tenant_domains SET tls_status=$3,
+		certificate_ref=CASE WHEN $3='issued' THEN $4 WHEN $3='revoked' THEN '' ELSE certificate_ref END,
+		certificate_revoked_at=CASE WHEN $3='revoked' THEN now() WHEN $3='issued' THEN NULL ELSE certificate_revoked_at END,
+		updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 RETURNING `+tenantDomainColumns,
+		tenantID, domainID, status, certificateRef)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TenantDomain{}, ErrNotFound
+	}
+	if err != nil {
+		return TenantDomain{}, err
+	}
+	if err := appendAudit(ctx, tx, &tenantID, actor, "tenant_domain.tls_status", "tenant_domain", domainID.String(), "success", "", map[string]any{"tls_status": status}); err != nil {
+		return TenantDomain{}, err
+	}
+	return out, tx.Commit()
+}
+
+func (s *Service) updateTenantDomainStatus(ctx context.Context, tenantID, domainID uuid.UUID, status string, actor Actor, action, reason string) (TenantDomain, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return TenantDomain{}, err
@@ -191,14 +264,27 @@ func (s *Service) updateTenantDomainStatus(ctx context.Context, tenantID, domain
 	}
 
 	var out TenantDomain
-	verifiedAt := "NULL"
+	verifiedAt, nextCheck, tlsStatus, revokedAt, certificateRef := "last_verified_at", "NULL", "tls_status", "certificate_revoked_at", "certificate_ref"
 	if status == "verified" {
 		verifiedAt = "now()"
+		nextCheck = "now() + interval '24 hours'"
+		tlsStatus = "CASE WHEN tls_status='issued' THEN 'issued' ELSE 'pending' END"
+		revokedAt = "NULL"
+	} else if status == "revoked" {
+		tlsStatus = "'revoked'"
+		revokedAt = "now()"
+		certificateRef = "''"
+	} else if status == "failed" {
+		tlsStatus = "'revoked'"
+		revokedAt = "now()"
+		certificateRef = "''"
 	}
-	q := `UPDATE mv_tenant_domains SET status = $3, last_verified_at = ` + verifiedAt + `, updated_at = now()
+	q := `UPDATE mv_tenant_domains SET status=$3, last_verified_at=` + verifiedAt + `, last_checked_at=now(),
+next_check_at=` + nextCheck + `, failure_reason=$4, tls_status=` + tlsStatus + `, certificate_ref=` + certificateRef + `,
+certificate_revoked_at=` + revokedAt + `, updated_at=now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, hostname, purpose, verification_method, verification_token, status, tls_status, last_verified_at, created_by, created_at, updated_at`
-	if err := tx.GetContext(ctx, &out, q, domainID, tenantID, status); err != nil {
+RETURNING ` + tenantDomainColumns
+	if err := tx.GetContext(ctx, &out, q, domainID, tenantID, status, reason); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return TenantDomain{}, ErrNotFound
 		}
@@ -208,6 +294,118 @@ RETURNING id, tenant_id, hostname, purpose, verification_method, verification_to
 		return TenantDomain{}, err
 	}
 	return out, tx.Commit()
+}
+
+func (s *Service) VerifyTenantDomainDNS(ctx context.Context, tenantID, domainID uuid.UUID, actor Actor) (TenantDomain, error) {
+	domain, err := s.getTenantDomain(ctx, tenantID, domainID)
+	if err != nil {
+		return TenantDomain{}, err
+	}
+	verified, reason := s.lookupDomainOwnership(ctx, domain)
+	if !verified {
+		return s.updateTenantDomainStatus(ctx, tenantID, domainID, "failed", actor, "tenant_domain.verify", reason)
+	}
+	return s.updateTenantDomainStatus(ctx, tenantID, domainID, "verified", actor, "tenant_domain.verify", "")
+}
+
+// RevalidateDueDomains rechecks verified domains whose next_check_at elapsed.
+// A failed lookup immediately removes the hostname from routing and marks its
+// TLS certificate revoked, preventing domain takeover after DNS ownership moves.
+func (s *Service) RevalidateDueDomains(ctx context.Context, actor Actor, limit int) (int, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	var tenantIDs []uuid.UUID
+	if err := s.db.SelectContext(ctx, &tenantIDs, `SELECT id FROM mv_tenants WHERE status='active' ORDER BY id`); err != nil {
+		return 0, err
+	}
+	checked := 0
+	for _, tenantID := range tenantIDs {
+		if checked >= limit {
+			break
+		}
+		tx, err := s.db.BeginTxx(ctx, nil)
+		if err != nil {
+			return checked, err
+		}
+		if err := setTenantScope(ctx, tx, tenantID); err != nil {
+			_ = tx.Rollback()
+			return checked, err
+		}
+		var ids []uuid.UUID
+		err = tx.SelectContext(ctx, &ids, `SELECT id FROM mv_tenant_domains WHERE tenant_id=$1 AND status='verified' AND next_check_at<=now() ORDER BY next_check_at LIMIT $2`, tenantID, limit-checked)
+		_ = tx.Rollback()
+		if err != nil {
+			return checked, err
+		}
+		for _, id := range ids {
+			if _, err := s.VerifyTenantDomainDNS(ctx, tenantID, id, actor); err != nil {
+				return checked, err
+			}
+			checked++
+		}
+	}
+	return checked, nil
+}
+
+func (s *Service) getTenantDomain(ctx context.Context, tenantID, domainID uuid.UUID) (TenantDomain, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return TenantDomain{}, err
+	}
+	defer tx.Rollback()
+	if err := setTenantScope(ctx, tx, tenantID); err != nil {
+		return TenantDomain{}, err
+	}
+	var out TenantDomain
+	if err := tx.GetContext(ctx, &out, `SELECT `+tenantDomainColumns+` FROM mv_tenant_domains WHERE tenant_id=$1 AND id=$2`, tenantID, domainID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TenantDomain{}, ErrNotFound
+		}
+		return TenantDomain{}, err
+	}
+	return out, tx.Commit()
+}
+
+func (s *Service) lookupDomainOwnership(ctx context.Context, domain TenantDomain) (bool, string) {
+	if domain.VerificationMethod == "txt" {
+		values, err := s.resolver.LookupTXT(ctx, domain.VerificationName)
+		if err != nil {
+			return false, fmt.Sprintf("TXT lookup failed: %v", err)
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) == domain.VerificationValue {
+				return true, ""
+			}
+		}
+		return false, "expected TXT value not found"
+	}
+	target, err := s.resolver.LookupCNAME(ctx, domain.VerificationName)
+	if err != nil {
+		return false, fmt.Sprintf("CNAME lookup failed: %v", err)
+	}
+	if strings.TrimSuffix(strings.ToLower(target), ".") != strings.TrimSuffix(strings.ToLower(domain.VerificationValue), ".") {
+		return false, "CNAME target does not match"
+	}
+	return true, ""
+}
+
+func domainVerificationRecord(domain TenantDomain) (string, string) {
+	if domain.VerificationMethod == "cname" {
+		hexToken := strings.TrimPrefix(domain.VerificationToken, "mailview-verify-")
+		return domain.Hostname, hexToken + ".verify.mailview.com.br"
+	}
+	return "_mailview-verification." + domain.Hostname, domain.VerificationToken
+}
+
+func validTenantHostname(hostname string) bool {
+	if len(hostname) < 4 || len(hostname) > 253 || strings.Contains(hostname, "*") || net.ParseIP(hostname) != nil {
+		return false
+	}
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") || strings.HasSuffix(hostname, ".local") {
+		return false
+	}
+	return hostnamePattern.MatchString(hostname)
 }
 
 func newDomainVerificationToken() (string, error) {

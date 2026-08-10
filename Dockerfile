@@ -36,13 +36,13 @@ COPY . .
 COPY --from=frontend /src/frontend/dist ./frontend/dist
 COPY --from=frontend /src/frontend/public/static/email-builder ./static/public/static/email-builder
 
-ARG MAILVIEW_VERSION=v0.4.0
+ARG MAILVIEW_VERSION=v0.5.0
 ARG MAILVIEW_COMMIT=unknown
 ARG MAILVIEW_BUILD_DATE=unknown
-RUN CGO_ENABLED=0 go build -o mailview \
+RUN CGO_ENABLED=0 go build -o MailView \
       -ldflags="-s -w -X 'main.buildString=${MAILVIEW_VERSION} (#${MAILVIEW_COMMIT} ${MAILVIEW_BUILD_DATE})' -X 'main.versionString=${MAILVIEW_VERSION}'" \
       ./cmd \
-    && stuffbin -a stuff -in mailview -out mailview \
+    && stuffbin -a stuff -in MailView -out MailView \
       config.toml.sample schema.sql queries:/queries permissions.json \
       static/public:/public static/email-templates frontend/dist:/admin i18n:/i18n
 
@@ -53,7 +53,7 @@ RUN apk --no-cache add ca-certificates tzdata \
     && adduser -S -D -H -u 10001 -G mailview -s /sbin/nologin mailview
 
 WORKDIR /mailview
-COPY --from=backend --chown=mailview:mailview /src/mailview .
+COPY --from=backend --chown=mailview:mailview /src/MailView .
 COPY --chown=mailview:mailview config.toml.sample config.toml
 COPY --chown=mailview:mailview docker-entrypoint.sh /usr/local/bin/
 
@@ -64,4 +64,4 @@ RUN chmod 0555 /usr/local/bin/docker-entrypoint.sh \
 USER 10001:10001
 EXPOSE 9000
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["./mailview"]
+CMD ["./MailView"]

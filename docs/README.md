@@ -4,6 +4,7 @@
 - [Funções e recursos](FUNCIONALIDADES.md)
 - [API MailView](API_MAILVIEW.md)
 - [Integrações](INTEGRACOES.md)
+- [Ferramentas e cadeia de entrega](FERRAMENTAS.md)
 - [Referência operacional](REFERENCIA_OPERACIONAL.md)
 
 Os diretórios abaixo preservam documentação do core herdado. Quando houver diferença de isolamento, nomenclatura ou deploy, os documentos MailView prevalecem.

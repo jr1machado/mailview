@@ -52,4 +52,22 @@ WHERE relname = ANY($1) AND relrowsecurity AND relforcerowsecurity`,
 	if protected != 12 {
 		t.Fatalf("FORCE RLS active on %d/12 tenant Data Plane tables", protected)
 	}
+	phase3Tables := []string{
+		"mv_tenant_branding", "mv_tenant_sessions", "mv_api_keys", "mv_billing_accounts", "mv_subscriptions", "mv_invoices", "mv_feature_flags",
+		"mv_smtp_profiles", "mv_sender_identities", "mv_sending_domains", "mv_domain_dns_records", "mv_complaints", "mv_campaign_events",
+		"mv_exports", "mv_webhooks", "mv_webhook_deliveries", "mv_transactional_messages",
+	}
+	if err := db.GetContext(ctx, &protected, `SELECT count(*) FROM pg_class WHERE relname=ANY($1) AND relrowsecurity AND relforcerowsecurity`, pq.Array(phase3Tables)); err != nil {
+		t.Fatal(err)
+	}
+	if protected != len(phase3Tables) {
+		t.Fatalf("FORCE RLS active on %d/%d Phase 3 tables", protected, len(phase3Tables))
+	}
+	phase4Tables := []string{"mv_campaign_workflows", "mv_campaign_workflow_events"}
+	if err := db.GetContext(ctx, &protected, `SELECT count(*) FROM pg_class WHERE relname=ANY($1) AND relrowsecurity AND relforcerowsecurity`, pq.Array(phase4Tables)); err != nil {
+		t.Fatal(err)
+	}
+	if protected != len(phase4Tables) {
+		t.Fatalf("FORCE RLS active on %d/%d Phase 4 tables", protected, len(phase4Tables))
+	}
 }

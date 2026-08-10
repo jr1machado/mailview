@@ -5,15 +5,15 @@ RUN apk --no-cache add ca-certificates tzdata \
     && adduser -S -D -H -u 10001 -G mailview -s /sbin/nologin mailview
 
 WORKDIR /mailview
-COPY --chown=mailview:mailview mailview ./mailview
+COPY --chown=mailview:mailview MailView ./MailView
 COPY --chown=mailview:mailview config.toml.sample ./config.toml
 COPY --chown=mailview:mailview docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod 0555 /usr/local/bin/docker-entrypoint.sh /mailview/mailview \
+RUN chmod 0555 /usr/local/bin/docker-entrypoint.sh /mailview/MailView \
     && mkdir -p /mailview/uploads /mailview/imports \
     && chown -R mailview:mailview /mailview
 
 USER 10001:10001
 EXPOSE 9000
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["./mailview"]
+CMD ["./MailView"]

@@ -1,3 +1,19 @@
+# Fase 3 — implementação
+
+Status em `feature/sprint03`: implementada. Esta fase acrescenta às fundações da Fase 2:
+
+- migrations 11/12 com o catálogo completo de entidades `mv_*`, `tenant_id`, índices tenant-first, FKs compostas e `FORCE RLS` estrito nas 17 entidades nativas tenant-owned;
+- envelope HMAC versionado que assina `tenant_id`, `job_id`, tipo, validade e hash do payload; o worker de import só inicia por esse envelope;
+- logs de requisição com `tenant_id`, `user_id` e `request_id`, sem confiar em campos editáveis do corpo;
+- workflow de slug com nomes reservados, unicidade global, histórico auditado e redirecionamento HTTP 308 por 1–365 dias;
+- hostname validado sem IP, wildcard, `.local` ou labels inválidos; unicidade global evita takeover;
+- desafio TXT/CNAME gerado pelo servidor, consulta DNS real, ativação somente após confirmação e revalidação automática (24h por padrão);
+- perda de propriedade DNS retira o host do roteamento e marca o certificado como revogado; o controlador TLS possui endpoint próprio;
+- contrato Enterprise dedicado completo no Control Plane: referências independentes de database, worker, SMTP, storage, chave e namespace Docker, com versão de roteamento e ativação atômica;
+- migrations e isolamento validados em PostgreSQL 17 com role `NOBYPASSRLS` e dois tenants.
+
+As credenciais dos recursos dedicados não são persistidas: somente referências para o secret manager/provisionador. O provisionamento físico continua sendo responsabilidade da infraestrutura, enquanto o Control Plane é a fonte autoritativa de roteamento.
+
 # 6. Modelo de multi-tenancy
 
 ## 6.1 Estratégia principal

@@ -33,7 +33,7 @@ FRONTEND_EMAIL_BUILDER_DEPS = \
 	$(FRONTEND_EMAIL_BUILDER)/vite.config.ts \
 	$(shell find $(FRONTEND_EMAIL_BUILDER)/src -type f)
 
-BIN := mailview
+BIN := MailView
 STATIC := config.toml.sample \
 	schema.sql queries:/queries permissions.json \
 	static/public:/public \
@@ -58,7 +58,7 @@ $(FRONTEND_EMAIL_BUILDER_YARN_MODULES): frontend/package.json frontend/yarn.lock
 	cd $(FRONTEND_EMAIL_BUILDER) && $(YARN) install
 	touch -c $(FRONTEND_EMAIL_BUILDER_YARN_MODULES)
 
-# Build the backend to ./mailview.
+# Build the backend to ./MailView.
 $(BIN): $(SRC) go.mod go.sum schema.sql $(SQL) permissions.json
 	CGO_ENABLED=0 go build -o ${BIN} -ldflags="-s -w -X 'main.buildString=${BUILDSTR}' -X 'main.versionString=${VERSION}'" ./cmd
 
@@ -99,7 +99,7 @@ run-frontend: $(FRONTEND_EMAIL_BUILDER_DIST_FINAL)
 test:
 	go test ./...
 
-# Bundle all static assets including the JS frontend into the ./mailview binary
+# Bundle all static assets including the JS frontend into the ./MailView binary
 # using stuffbin (installed with make deps).
 .PHONY: dist
 dist: $(STUFFBIN) build build-frontend pack-bin
@@ -147,4 +147,4 @@ rm-dev-docker: build ## Delete the docker containers including DB volumes.
 .PHONY: init-dev-docker
 init-dev-docker: build-dev-docker ## Delete the docker containers including DB volumes.
 	cd dev; \
-	docker compose run --rm backend sh -c "make dist && ./mailview --install --idempotent --yes --config dev/config.toml"
+	docker compose run --rm backend sh -c "make dist && ./MailView --install --idempotent --yes --config dev/config.toml"

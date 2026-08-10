@@ -60,6 +60,11 @@
 
       <!-- body //-->
       <div class="main">
+        <div v-if="impersonation" class="notification is-warning impersonation-banner">
+          <strong>Support impersonation active.</strong>
+          Acting as user {{ impersonation.targetUserId }} until {{ impersonation.expiresAt }}.
+          <b-button size="is-small" type="is-danger" outlined @click="stopImpersonation">End session</b-button>
+        </div>
         <div class="global-notices" v-if="isGlobalNotices">
           <div v-if="serverConfig.needs_restart" class="notification is-danger">
             {{ $t('settings.needsRestart') }}
@@ -128,6 +133,7 @@ export default Vue.extend({
       activeItem: {},
       activeGroup: {},
       windowWidth: window.innerWidth,
+      impersonation: null,
     };
   },
 
@@ -147,6 +153,32 @@ export default Vue.extend({
   },
 
   methods: {
+    loadImpersonation() {
+      const raw = window.localStorage.getItem('mailview.impersonation');
+      if (!raw) {
+        this.impersonation = null;
+        return;
+      }
+      try {
+        const value = JSON.parse(raw);
+        if (!value.id || new Date(value.expiresAt) <= new Date()) {
+          window.localStorage.removeItem('mailview.impersonation');
+          this.impersonation = null;
+          return;
+        }
+        this.impersonation = value;
+      } catch (e) {
+        window.localStorage.removeItem('mailview.impersonation');
+        this.impersonation = null;
+      }
+    },
+
+    stopImpersonation() {
+      window.localStorage.removeItem('mailview.impersonation');
+      this.impersonation = null;
+      window.location.reload();
+    },
+
     toggleGroup(group, state) {
       this.activeGroup = state ? { [group]: true } : {};
     },
@@ -216,6 +248,8 @@ export default Vue.extend({
   },
 
   mounted() {
+    this.loadImpersonation();
+    window.addEventListener('storage', this.loadImpersonation);
     // Lists is required across different views. On app load, fetch the lists
     // and have them in the store.
     this.$api.getLists({ minimal: true, per_page: 'all', status: 'active' });
@@ -225,6 +259,10 @@ export default Vue.extend({
     });
 
     this.listenEvents();
+  },
+
+  beforeDestroy() {
+    window.removeEventListener('storage', this.loadImpersonation);
   },
 });
 </script>

@@ -22,6 +22,9 @@
       <div class="column"><div class="box"><p class="heading">Domains pending verification</p><p class="title">{{ dashboard.domainsPendingVerification }}</p></div></div>
       <div class="column"><div class="box"><p class="heading">Audit events (24h)</p><p class="title">{{ dashboard.auditEventsLast24h }}</p></div></div>
       <div class="column"><div class="box"><p class="heading">Active impersonation grants</p><p class="title">{{ dashboard.activeImpersonationGrants }}</p></div></div>
+      <div class="column"><div class="box"><p class="heading">Bounces (24h)</p><p class="title">{{ dashboard.bouncesLast24h }}</p></div></div>
+      <div class="column"><div class="box"><p class="heading">Webhook failures</p><p class="title">{{ dashboard.webhookFailuresLast24h }}</p></div></div>
+      <div class="column"><div class="box"><p class="heading">Open incidents</p><p class="title">{{ dashboard.openIncidents }}</p></div></div>
     </div>
 
     <b-table v-if="canManageTenants" :data="tenants" :loading="loading.mailviewTenants" hoverable>
@@ -90,6 +93,14 @@ Time-boxed, reason-required access to a tenant member's data. Requires the actor
         <b-tag :type="impersonationStatusTagType(props.row)">{{ impersonationStatus(props.row) }}</b-tag>
       </b-table-column>
       <b-table-column v-slot="props" label="Actions">
+        <b-button v-if="props.row.approvalRequired && !props.row.approvedAt && props.row.actorUserId !== profile.id"
+          size="is-small" type="is-success" @click="approveImpersonation(props.row)">
+Approve
+</b-button>
+        <b-button v-if="impersonationStatus(props.row) === 'active'" size="is-small"
+          @click="activateImpersonation(props.row)">
+Use grant
+</b-button>
         <b-button v-if="impersonationStatus(props.row) === 'active'" size="is-small" type="is-danger"
           @click="revokeImpersonation(props.row)">
 Revoke
@@ -103,6 +114,7 @@ Revoke
       <b-input v-else v-model="impersonationForm.tenantId" placeholder="Tenant UUID" />
       <b-input v-model.number="impersonationForm.targetUserId" placeholder="Target user ID" type="number" />
       <b-input v-model.number="impersonationForm.ttlMinutes" placeholder="TTL (min, max 30)" type="number" />
+      <b-checkbox v-model="impersonationForm.requireApproval">Require approval</b-checkbox>
     </b-field>
     <b-field class="impersonation-form">
       <b-input v-model="impersonationForm.reason" placeholder="Reason (min 10 chars, required)" expanded />
@@ -126,6 +138,14 @@ Revoke
       <div class="box" v-if="selected">
         <h3 class="title is-5">{{ selected.slug }}</h3>
 
+        <h4 class="title is-6">Tenant slug</h4>
+        <p class="has-text-grey">Changes create a controlled HTTP 308 alias for the selected period.</p>
+        <b-field grouped>
+          <b-input v-model="slugForm.slug" placeholder="new-tenant-slug" />
+          <b-input v-model.number="slugForm.redirectDays" type="number" min="1" max="365" />
+          <b-button @click="changeSlug">Change slug</b-button>
+        </b-field>
+
         <h4 class="title is-6">Quota</h4>
         <b-field grouped v-if="quota">
           <p>Plan: <strong>{{ quota.planCode }}</strong></p>
@@ -138,16 +158,21 @@ Revoke
         </b-field>
 
         <h4 class="title is-6">Domains</h4>
+        <b-button size="is-small" @click="revalidateDomains">Revalidate due domains</b-button>
         <b-table :data="domains" hoverable>
           <b-table-column v-slot="props" field="hostname" label="Hostname">{{ props.row.hostname }}</b-table-column>
           <b-table-column v-slot="props" field="purpose" label="Purpose">{{ props.row.purpose }}</b-table-column>
           <b-table-column v-slot="props" field="status" label="Status">
             <b-tag :type="domainStatusTagType(props.row.status)">{{ props.row.status }}</b-tag>
           </b-table-column>
+      <b-table-column v-slot="props" field="verificationName" label="DNS record">
+      <code>{{ props.row.verificationName }}</code><br />
+      <small>{{ props.row.verificationValue }}</small>
+      </b-table-column>
           <b-table-column v-slot="props" label="Actions">
-            <b-button v-if="props.row.status === 'pending'" size="is-small" type="is-success"
+            <b-button v-if="props.row.status === 'pending' || props.row.status === 'failed'" size="is-small" type="is-success"
               @click="verifyDomain(props.row)">
-Mark verified
+Verify DNS
 </b-button>
             <b-button v-if="props.row.status !== 'revoked'" size="is-small" type="is-danger"
               @click="revokeDomain(props.row)">
@@ -165,6 +190,10 @@ Revoke
             <option value="return_path">return_path</option>
             <option value="public_forms">public_forms</option>
           </b-select>
+      <b-select v-model="newDomain.verificationMethod" placeholder="DNS method">
+      <option value="txt">TXT</option>
+      <option value="cname">CNAME</option>
+      </b-select>
           <b-button type="is-primary" @click="createDomain">Add domain</b-button>
         </b-field>
 
@@ -176,17 +205,24 @@ Revoke
 
         <h4 class="title is-6">Infrastructure (Enterprise)</h4>
         <p class="has-text-grey">
-Flags the requested topology; actually provisioning a dedicated database/worker/SMTP
-          happens outside this app.
+The Control Plane only accepts activation after all dedicated resource references are present.
 </p>
         <b-field grouped>
-          <b-select v-model="infrastructureMode">
+      <b-select v-model="infrastructure.mode">
             <option value="shared">shared</option>
             <option value="dedicated_requested">dedicated_requested</option>
             <option value="dedicated">dedicated</option>
           </b-select>
           <b-button @click="applyInfrastructureMode">Apply</b-button>
         </b-field>
+    <b-field v-if="infrastructure.mode !== 'shared'" grouped group-multiline>
+      <b-input v-model="infrastructure.databaseRef" placeholder="Database secret ref" />
+      <b-input v-model="infrastructure.workerRef" placeholder="Worker/queue ref" />
+      <b-input v-model="infrastructure.smtpRef" placeholder="SMTP secret ref" />
+      <b-input v-model="infrastructure.storageRef" placeholder="Storage ref" />
+      <b-input v-model="infrastructure.encryptionKeyRef" placeholder="Encryption key ref" />
+      <b-input v-model="infrastructure.dockerNamespace" placeholder="Docker namespace" />
+    </b-field>
       </div>
     </b-modal>
   </section>
@@ -210,13 +246,16 @@ export default {
       domains: [],
       quota: null,
       quotaPlanCode: '',
-      newDomain: { hostname: '', purpose: 'sending' },
+      newDomain: { hostname: '', purpose: 'sending', verificationMethod: 'txt' },
+      slugForm: { slug: '', redirectDays: 30 },
       dashboard: null,
       resetOwnerUserId: null,
-      infrastructureMode: 'shared',
+      infrastructure: {
+        mode: 'shared', databaseRef: '', workerRef: '', smtpRef: '', storageRef: '', encryptionKeyRef: '', dockerNamespace: '',
+      },
       impersonationGrants: [],
       impersonationForm: {
-        tenantId: null, targetUserId: null, ttlMinutes: 15, reason: '',
+        tenantId: null, targetUserId: null, ttlMinutes: 15, reason: '', requireApproval: false,
       },
     };
   },
@@ -224,6 +263,10 @@ export default {
   computed: {
     loading() {
       return this.$store.state.loading;
+    },
+
+    profile() {
+      return this.$store.state.profile;
     },
 
     canManagePlatformRoles() {
@@ -308,10 +351,11 @@ export default {
       this.selected = tenant;
       this.isDetailOpen = true;
       this.resetOwnerUserId = null;
-      this.infrastructureMode = 'shared';
+      this.slugForm = { slug: tenant.slug, redirectDays: 30 };
       this.domains = await this.$api.getMailViewTenantDomains(tenant.id);
       this.quota = await this.$api.getMailViewTenantQuota(tenant.id);
       this.quotaPlanCode = this.quota.planCode;
+      this.infrastructure = await this.$api.getMailViewTenantInfrastructure(tenant.id);
     },
 
     async resetOwner() {
@@ -326,7 +370,25 @@ export default {
       if (!this.selected) {
         return;
       }
-      await this.$api.setMailViewTenantInfrastructure(this.selected.id, this.infrastructureMode);
+      await this.$api.setMailViewTenantInfrastructure(this.selected.id, {
+        mode: this.infrastructure.mode,
+        database_ref: this.infrastructure.databaseRef || '',
+        worker_ref: this.infrastructure.workerRef || '',
+        smtp_ref: this.infrastructure.smtpRef || '',
+        storage_ref: this.infrastructure.storageRef || '',
+        encryption_key_ref: this.infrastructure.encryptionKeyRef || '',
+        docker_namespace: this.infrastructure.dockerNamespace || '',
+      });
+      this.infrastructure = await this.$api.getMailViewTenantInfrastructure(this.selected.id);
+    },
+
+    async changeSlug() {
+      if (!this.selected || !this.slugForm.slug) return;
+      const result = await this.$api.changeMailViewTenantSlug(this.selected.id, {
+        slug: this.slugForm.slug, redirect_days: this.slugForm.redirectDays,
+      });
+      this.selected = result.tenant;
+      await this.loadTenants();
     },
 
     async loadDashboard() {
@@ -341,11 +403,16 @@ export default {
       if (grant.revokedAt) {
         return 'revoked';
       }
+      if (grant.approvalRequired && !grant.approvedAt) {
+        return 'pending approval';
+      }
       return new Date(grant.expiresAt) > new Date() ? 'active' : 'expired';
     },
 
     impersonationStatusTagType(grant) {
-      const types = { active: 'is-success', expired: 'is-light', revoked: 'is-danger' };
+      const types = {
+        active: 'is-success', expired: 'is-light', revoked: 'is-danger', 'pending approval': 'is-warning',
+      };
       return types[this.impersonationStatus(grant)];
     },
 
@@ -361,9 +428,10 @@ export default {
         target_user_id: targetUserId,
         ttl_minutes: ttlMinutes,
         reason,
+        require_approval: this.impersonationForm.requireApproval,
       });
       this.impersonationForm = {
-        tenantId: null, targetUserId: null, ttlMinutes: 15, reason: '',
+        tenantId: null, targetUserId: null, ttlMinutes: 15, reason: '', requireApproval: false,
       };
       this.loadImpersonationGrants();
       if (this.canManageTenants) this.loadDashboard();
@@ -373,6 +441,22 @@ export default {
       await this.$api.revokeMailViewImpersonation(grant.id);
       this.loadImpersonationGrants();
       if (this.canManageTenants) this.loadDashboard();
+    },
+
+    async approveImpersonation(grant) {
+      await this.$api.approveMailViewImpersonation(grant.id);
+      this.loadImpersonationGrants();
+    },
+
+    activateImpersonation(grant) {
+      window.localStorage.setItem('mailview.impersonation', JSON.stringify({
+        id: grant.id,
+        tenantId: grant.tenantId,
+        targetUserId: grant.targetUserId,
+        expiresAt: grant.expiresAt,
+      }));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'mailview.impersonation' }));
+      this.$utils.toast('Impersonation active. Open the tenant host to use this grant.', 'is-warning');
     },
 
     async applyQuotaPlan() {
@@ -386,8 +470,12 @@ export default {
       if (!this.selected || !this.newDomain.hostname) {
         return;
       }
-      await this.$api.createMailViewTenantDomain(this.selected.id, this.newDomain);
-      this.newDomain = { hostname: '', purpose: 'sending' };
+      await this.$api.createMailViewTenantDomain(this.selected.id, {
+        hostname: this.newDomain.hostname,
+        purpose: this.newDomain.purpose,
+        verification_method: this.newDomain.verificationMethod,
+      });
+      this.newDomain = { hostname: '', purpose: 'sending', verificationMethod: 'txt' };
       this.domains = await this.$api.getMailViewTenantDomains(this.selected.id);
     },
 
@@ -398,6 +486,11 @@ export default {
 
     async revokeDomain(domain) {
       await this.$api.revokeMailViewTenantDomain(this.selected.id, domain.id);
+      this.domains = await this.$api.getMailViewTenantDomains(this.selected.id);
+    },
+
+    async revalidateDomains() {
+      await this.$api.revalidateMailViewTenantDomains();
       this.domains = await this.$api.getMailViewTenantDomains(this.selected.id);
     },
   },

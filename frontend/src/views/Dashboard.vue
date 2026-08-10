@@ -8,6 +8,17 @@
       </div>
     </header>
 
+    <div v-if="tenantHome" class="columns is-multiline">
+      <div class="column is-one-fifth"><div class="box"><p class="heading">Sent this month</p><p class="title is-4">{{ $utils.niceNumber(tenantHome.emailsSent) }}</p></div></div>
+      <div class="column is-one-fifth"><div class="box"><p class="heading">Active campaigns</p><p class="title is-4">{{ tenantHome.activeCampaigns }}</p></div></div>
+      <div class="column is-one-fifth"><div class="box"><p class="heading">Contacts</p><p class="title is-4">{{ $utils.niceNumber(tenantHome.contacts) }}</p></div></div>
+      <div class="column is-one-fifth"><div class="box"><p class="heading">Bounces this month</p><p class="title is-4">{{ tenantHome.bounces }}</p></div></div>
+      <div class="column is-one-fifth"><div class="box"><p class="heading">Plan</p><p class="title is-4">{{ tenantHome.planCode }}</p></div></div>
+      <div v-for="alert in tenantHome.deliverabilityAlerts" :key="alert" class="column is-12">
+        <b-notification type="is-warning" :closable="false">Deliverability alert: {{ alert }}</b-notification>
+      </div>
+    </div>
+
     <section class="counts wrap">
       <div class="tile is-ancestor">
         <div class="tile is-vertical is-12">
@@ -166,6 +177,7 @@ export default Vue.extend({
       isCountsLoading: true,
       campaignViews: null,
       campaignClicks: null,
+      tenantHome: null,
       counts: {
         lists: {},
         subscribers: {},
@@ -190,6 +202,12 @@ export default Vue.extend({
         this.campaignViews = this.makeChart(data.campaignViews);
         this.campaignClicks = this.makeChart(data.linkClicks);
       });
+
+      if (this.profile.mailviewTenantId) {
+        this.$api.getMailViewTenantHome().then((data) => {
+          this.tenantHome = data;
+        });
+      }
     },
 
     makeChart(data) {
@@ -212,7 +230,7 @@ export default Vue.extend({
   },
 
   computed: {
-    ...mapState(['settings']),
+    ...mapState(['settings', 'profile']),
     dayjs() {
       return dayjs;
     },
