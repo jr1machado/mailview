@@ -3,7 +3,7 @@
 Metadados versionados da release:
 
 - tag SemVer: `v0.4.0`;
-- binário: `mailview` / `mailview.exe`;
+- binário: `MailView` / `MailView.exe`;
 - arquivos: `MailView_0.4.0_<os>_<arch>.tar.gz`;
 - container: `ghcr.io/jr1machado/mailview:v0.4.0`;
 - [release notes](../../RELEASE_NOTES.md);

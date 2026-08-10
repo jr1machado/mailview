@@ -1,6 +1,6 @@
 name: mailview
 
-# Topologia executável da release MailView v0.5.0: proxy TLS, aplicação
+# Topologia executável da release MailView v0.6.0: proxy TLS, aplicação
 # monolítica e PostgreSQL. O frontend e os workers estão no mesmo binário.
 services:
   proxy:

@@ -60,6 +60,17 @@
 
       <!-- body //-->
       <div class="main">
+        <div v-if="profile.mailviewTenantId" class="tenant-context-banner">
+          <span class="tenant-context-banner__icon"><b-icon icon="check-circle-outline" /></span>
+          <span class="tenant-context-banner__copy">
+            <small>AMBIENTE DO CLIENTE</small>
+            <strong>{{ tenantHostname }}</strong>
+          </span>
+          <span class="tenant-context-banner__boundary">
+            <span>Tenant isolado</span>
+            <code>{{ shortActiveTenantId }}</code>
+          </span>
+        </div>
         <div v-if="impersonation" class="notification is-warning impersonation-banner">
           <strong>Support impersonation active.</strong>
           Acting as user {{ impersonation.targetUserId }} until {{ impersonation.expiresAt }}.
@@ -230,6 +241,15 @@ export default Vue.extend({
   computed: {
     ...mapState(['serverConfig', 'profile']),
 
+    tenantHostname() {
+      return window.location.hostname;
+    },
+
+    shortActiveTenantId() {
+      const id = this.profile.mailviewTenantId || '';
+      return id ? `${id.slice(0, 8)}…${id.slice(-4)}` : '';
+    },
+
     isGlobalNotices() {
       return (this.serverConfig.needs_restart
         || this.serverConfig.has_legacy_user
@@ -270,4 +290,65 @@ export default Vue.extend({
 <style lang="scss">
 @import "assets/style.scss";
 @import "assets/icons/fontello.css";
+
+.tenant-context-banner {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  margin: -1rem -1rem 1.25rem;
+  padding: .7rem 1rem;
+  border-bottom: 1px solid #bcd2ef;
+  color: #203a5d;
+  background: linear-gradient(90deg, #eef5ff 0%, #f7faff 100%);
+}
+
+.tenant-context-banner__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  color: #fff;
+  background: #0055d4;
+}
+
+.tenant-context-banner__copy small,
+.tenant-context-banner__copy strong {
+  display: block;
+}
+
+.tenant-context-banner__copy small {
+  color: #557196;
+  font-size: .62rem;
+  font-weight: 600;
+  letter-spacing: .12em;
+}
+
+.tenant-context-banner__copy strong {
+  font-size: .82rem;
+}
+
+.tenant-context-banner__boundary {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  margin-left: auto;
+  padding: .35rem .55rem;
+  border: 1px solid #bdd0e9;
+  border-radius: 6px;
+  color: #345271;
+  background: rgba(255, 255, 255, .7);
+  font-size: .68rem;
+}
+
+.tenant-context-banner__boundary code {
+  color: #486580;
+  background: transparent;
+  font-size: .65rem;
+}
+
+@media screen and (max-width: 600px) {
+  .tenant-context-banner__boundary span { display: none; }
+}
 </style>

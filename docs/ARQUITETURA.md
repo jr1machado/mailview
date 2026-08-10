@@ -1,4 +1,4 @@
-# Arquitetura do MailView — v0.5.0
+# Arquitetura do MailView — v0.6.0
 
 ## Controles da Fase 4
 
@@ -22,7 +22,7 @@ Há dois trilhos de migrations: o core mantém seu migrador e MailView usa ledge
 
 | Componente | Responsabilidade |
 |---|---|
-| `mailview` | HTTP, REST, páginas públicas, SPA embarcada, campanhas, imports e bounces |
+| `MailView` | HTTP, REST, páginas públicas, SPA embarcada, campanhas, imports e bounces |
 | Vue SPA | painel do tenant e portal da plataforma; Vue 2.7/Buefy/Vite |
 | PostgreSQL | dados, sessões, filas persistentes, auditoria e RLS |
 | Caddy/proxy | TLS, ACME e reverse proxy na topologia fornecida |
@@ -30,6 +30,27 @@ Há dois trilhos de migrations: o core mantém seu migrador e MailView usa ledge
 | SMTP/postback | entrega externa |
 
 Não existem serviços separados de frontend, worker ou billing, nem Redis em uso. Com `--passive`, o processo serve HTTP sem iniciar o scanner de campanhas. Imports rodam em goroutine no processo que recebeu o upload.
+
+## Representação visual dos ambientes
+
+O Control Plane representa o contrato de roteamento real de cada tenant em três
+faixas. A UI lê `GET /api/mailview/tenants` e, para cada tenant, consulta
+`GET /api/mailview/tenants/:tenantID/infrastructure`:
+
+```text
+MailView Control Plane
+        │ roteamento + tenant boundary
+        ├─ shared ───────────── recursos comuns + RLS/FKs tenant-first
+        ├─ dedicated_requested  referências em provisionamento
+        └─ dedicated ────────── DB/fila/SMTP/storage/KMS/namespace referenciados
+```
+
+O cartão não afirma provisionamento físico: ele exibe o estado persistido pelo
+contrato `mv_tenant_infrastructure`. Em `shared`, o isolamento é lógico e
+obrigatório no mesmo PostgreSQL; em `dedicated`, a aplicação exige todas as
+referências antes de ativar a rota. A faixa exibida no portal do cliente usa o
+tenant resolvido no servidor e mostra hostname e UUID abreviado, sem permitir
+que o navegador escolha ou envie um `tenant_id` arbitrário.
 
 ## Planos lógicos
 
@@ -133,7 +154,7 @@ No plano Enterprise, `mv_tenant_infrastructure` é a fonte de roteamento e guard
 Réplicas `--passive` aumentam capacidade HTTP; recomenda-se só uma instância ativa para o scanner nesta release. Todos os nós compartilham PostgreSQL e storage; em cluster prefira S3. O Compose mínimo tem pontos únicos de falha e não fornece eleição de líder, fila distribuída, HA ou autoscaling.
 
 ```text
-DNS → Caddy :80/:443 → mailview :9000 → PostgreSQL :5432
+DNS → Caddy :80/:443 → MailView :9000 → PostgreSQL :5432
                               ├→ SMTP/postback
                               ├→ S3 opcional
                               └→ OIDC opcional

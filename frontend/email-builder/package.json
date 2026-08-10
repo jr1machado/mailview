@@ -1,6 +1,6 @@
 {
-  "name": "@listmonk/email-builder",
-  "version": "1.0.0",
+  "name": "@mailview/email-builder",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

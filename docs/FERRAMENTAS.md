@@ -1,4 +1,4 @@
-# Ferramentas e cadeia de entrega do MailView v0.5.0
+# Ferramentas e cadeia de entrega do MailView v0.6.0
 
 Este documento registra as ferramentas realmente usadas para desenvolver,
 validar, empacotar, publicar e operar o MailView. Versões são as declaradas na
@@ -11,8 +11,9 @@ release; substituições devem passar pela mesma matriz de testes.
 | Go | 1.26.5 | API, Control Plane, Data Plane, workers internos e binário `MailView` |
 | Node.js | 22 | build da SPA e do editor de e-mail |
 | Yarn | 1.22.22 | dependências, lint e build frontend |
-| Vue | 2.7.14 | painel administrativo e portal tenant |
-| Vite | 5.4 | bundling da SPA |
+| Vue/Buefy/Bulma | 2.7.14/0.9.25/0.9.4 | painel administrativo e portal tenant |
+| Vite | 5.4 (SPA), 6.4 (editor) | bundling dos frontends |
+| React/TypeScript | 18.2/5.2 | editor visual embarcado `@mailview/email-builder` |
 | PostgreSQL | 17 recomendado | persistência, constraints, transações e RLS |
 | `stuffbin` | dependência Go do projeto | incorpora frontend, SQL, templates e i18n no executável |
 | GNU Make | compatível com o Makefile | comandos reproduzíveis de build/test/release |
@@ -46,10 +47,10 @@ um banco descartável. Nunca execute a suíte de migrations contra produção.
 ## Empacotamento e publicação
 
 GoReleaser v2 lê `.goreleaser.yml`, gera `MailView`/`MailView.exe`, arquivos
-`MailView_0.5.0_<os>_<arch>.tar.gz`, checksum
-`MailView_0.5.0_checksums.txt` e a release `MailView v0.5.0`. Buildx/QEMU monta
+`MailView_0.6.0_<os>_<arch>.tar.gz`, checksum
+`MailView_0.6.0_checksums.txt` e a release `MailView v0.6.0`. Buildx/QEMU monta
 imagens Linux multi-arquitetura. O caminho OCI permanece minúsculo por regra do
-registry: `ghcr.io/jr1machado/mailview:v0.5.0`.
+registry: `ghcr.io/jr1machado/mailview:v0.6.0`.
 
 GitHub Actions executa:
 
@@ -80,3 +81,5 @@ O módulo Go `github.com/knadh/listmonk`, o prefixo de configuração
 `LISTMONK_*` e alguns nomes de schema/database são mantidos para evitar quebra
 de API, migrações e volumes existentes. Eles não identificam produto, binário,
 pacote de release ou imagem publicada: esses artefatos pertencem ao MailView.
+Scopes npm e caminhos OCI aparecem em minúsculas (`@mailview/*`,
+`ghcr.io/.../mailview`) porque esses registries impõem essa normalização.

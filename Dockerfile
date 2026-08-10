@@ -36,7 +36,7 @@ COPY . .
 COPY --from=frontend /src/frontend/dist ./frontend/dist
 COPY --from=frontend /src/frontend/public/static/email-builder ./static/public/static/email-builder
 
-ARG MAILVIEW_VERSION=v0.5.0
+ARG MAILVIEW_VERSION=v0.6.0
 ARG MAILVIEW_COMMIT=unknown
 ARG MAILVIEW_BUILD_DATE=unknown
 RUN CGO_ENABLED=0 go build -o MailView \
