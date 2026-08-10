@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/knadh/listmonk/internal/auth"
@@ -126,6 +128,9 @@ func (a *App) mailviewPublicTenant(next echo.HandlerFunc) echo.HandlerFunc {
 		if err != nil || tenantRecord.Status != control.TenantStatusActive {
 			return echo.NewHTTPError(http.StatusNotFound, "tenant host not found")
 		}
+		if redirected, err := a.redirectCanonicalTenantHost(c, tenantRecord); redirected {
+			return err
+		}
 		scoped := tenant.WithContext(c.Request().Context(), tenant.Context{TenantID: tenantRecord.ID, RequestID: strings.TrimSpace(c.Request().Header.Get("X-Request-ID"))})
 		tx, _, err := tenant.Begin(scoped, a.db)
 		if err != nil {
@@ -184,6 +189,9 @@ func (a *App) mailviewRequestContextFor(c echo.Context, permission string) (cont
 	if err != nil || tenantRecord.Status != control.TenantStatusActive {
 		return nil, echo.NewHTTPError(http.StatusNotFound, "tenant not found")
 	}
+	if redirected, err := a.redirectCanonicalTenantHost(c, tenantRecord); redirected {
+		return nil, err
+	}
 	u := auth.GetUser(c)
 	effectiveUserID := u.ID
 
@@ -200,6 +208,9 @@ func (a *App) mailviewRequestContextFor(c echo.Context, permission string) (cont
 			return nil, echo.NewHTTPError(http.StatusForbidden, "impersonation grant does not cover this tenant")
 		}
 		effectiveUserID = grant.TargetUserID
+		c.Response().Header().Set("X-MailView-Impersonating", "true")
+		c.Response().Header().Set("X-MailView-Impersonation-Expires-At", grant.ExpiresAt.UTC().Format(time.RFC3339))
+		c.Response().Header().Set("X-MailView-Impersonation-Target", strconv.Itoa(grant.TargetUserID))
 	}
 
 	ok, err := a.mailview.HasActiveMembership(c.Request().Context(), tenantRecord.ID, effectiveUserID)
@@ -219,6 +230,31 @@ func (a *App) mailviewRequestContextFor(c echo.Context, permission string) (cont
 		}
 	}
 	return tenant.WithContext(c.Request().Context(), tenant.Context{TenantID: tenantRecord.ID, UserID: effectiveUserID, RequestID: strings.TrimSpace(c.Request().Header.Get("X-Request-ID"))}), nil
+}
+
+func (a *App) redirectCanonicalTenantHost(c echo.Context, tenantRecord control.Tenant) (bool, error) {
+	host := strings.ToLower(c.Request().Host)
+	port := ""
+	if value, valuePort, err := net.SplitHostPort(host); err == nil {
+		host, port = value, valuePort
+	}
+	suffix := "." + a.tenantBaseDomain
+	if a.tenantBaseDomain == "" || !strings.HasSuffix(host, suffix) {
+		return false, nil
+	}
+	requestedSlug := strings.TrimSuffix(host, suffix)
+	if requestedSlug == tenantRecord.Slug || requestedSlug == "" || strings.Contains(requestedSlug, ".") {
+		return false, nil
+	}
+	canonicalHost := tenantRecord.Slug + suffix
+	if port != "" {
+		canonicalHost = net.JoinHostPort(canonicalHost, port)
+	}
+	target := "https://" + canonicalHost + c.Request().URL.RequestURI()
+	if c.Request().TLS == nil {
+		target = "http://" + canonicalHost + c.Request().URL.RequestURI()
+	}
+	return true, c.Redirect(http.StatusPermanentRedirect, target)
 }
 
 func (a *App) resolveMailviewTenantHost(ctx context.Context, rawHost string) (control.Tenant, error) {

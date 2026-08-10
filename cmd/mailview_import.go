@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/knadh/listmonk/internal/mailview/importjob"
-	"github.com/knadh/listmonk/internal/mailview/tenant"
 	"github.com/labstack/echo/v4"
 )
 
@@ -50,14 +49,13 @@ func (a *App) CreateMailViewImportJob(c echo.Context) error {
 	}
 
 	if job.Status == importjob.StatusPending {
-		// Detach from the request context so the worker survives past the
-		// response, carrying only the tenant scope forward.
-		if scope, ok := tenant.FromContext(tenantCtx); ok {
-			bgCtx := tenant.WithContext(context.Background(), scope)
-			go func() {
-				_ = a.importJobs.ProcessJob(bgCtx, job.ID)
-			}()
+		// Detach from the request only after signing tenant_id and job_id. The
+		// worker reconstructs its tenant context from the verified envelope.
+		envelope, err := a.importJobs.WorkerEnvelope(tenantCtx, job.ID)
+		if err != nil {
+			return importJobHTTPError(err)
 		}
+		go func() { _ = a.importJobs.ProcessEnvelope(context.Background(), envelope) }()
 	}
 
 	return c.JSON(http.StatusCreated, okResp{Data: job})

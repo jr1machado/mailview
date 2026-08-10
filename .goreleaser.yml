@@ -13,7 +13,7 @@ before:
 
 builds:
   - id: mailview
-    binary: mailview
+    binary: MailView
     main: ./cmd
     goos:
       - linux
@@ -45,6 +45,15 @@ archives:
     formats: [tar.gz]
     files:
       - README.md
+      - RELEASE_NOTES.md
+      - ISSUES_CONHECIDOS.md
+      - docs/ARQUITETURA.md
+      - docs/FUNCIONALIDADES.md
+      - docs/INTEGRACOES.md
+      - docs/REFERENCIA_OPERACIONAL.md
+      - docs/FERRAMENTAS.md
+      - MailView-simple.service
+      - MailView@.service
       - LICENSE
 
 dockers:

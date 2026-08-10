@@ -19,10 +19,24 @@ const utils = new Utils();
 
 // Intercept requests to set the 'loading' state of a model.
 http.interceptors.request.use((config) => {
-  if ('loading' in config) {
-    store.commit('setLoading', { model: config.loading, status: true });
+  const request = { ...config, headers: { ...config.headers } };
+  const rawGrant = window.localStorage.getItem('mailview.impersonation');
+  if (rawGrant) {
+    try {
+      const grant = JSON.parse(rawGrant);
+      if (grant.id && new Date(grant.expiresAt) > new Date()) {
+        request.headers['X-MailView-Impersonation'] = grant.id;
+      } else {
+        window.localStorage.removeItem('mailview.impersonation');
+      }
+    } catch (e) {
+      window.localStorage.removeItem('mailview.impersonation');
+    }
   }
-  return config;
+  if ('loading' in request) {
+    store.commit('setLoading', { model: request.loading, status: true });
+  }
+  return request;
 }, (error) => Promise.reject(error));
 
 // Intercept responses to set them to store.
@@ -645,6 +659,12 @@ export const updateMailViewTenantStatus = (id, status) => http.patch(
   { loading: models.mailviewTenants },
 );
 
+export const changeMailViewTenantSlug = (tenantID, data) => http.post(
+  `/api/mailview/tenants/${tenantID}/slug`,
+  data,
+  { loading: models.mailviewTenants },
+);
+
 export const getMailViewTenantDomains = (tenantID) => http.get(
   `/api/mailview/tenants/${tenantID}/domains`,
   { loading: models.mailviewTenants },
@@ -664,6 +684,12 @@ export const verifyMailViewTenantDomain = (tenantID, domainID) => http.post(
 
 export const revokeMailViewTenantDomain = (tenantID, domainID) => http.post(
   `/api/mailview/tenants/${tenantID}/domains/${domainID}/revoke`,
+  {},
+  { loading: models.mailviewTenants },
+);
+
+export const revalidateMailViewTenantDomains = () => http.post(
+  '/api/mailview/domains/revalidate',
   {},
   { loading: models.mailviewTenants },
 );
@@ -716,9 +742,14 @@ export const resetMailViewTenantOwner = (tenantID, newOwnerUserID) => http.post(
   { loading: models.mailviewTenants },
 );
 
-export const setMailViewTenantInfrastructure = (tenantID, mode) => http.post(
+export const getMailViewTenantInfrastructure = (tenantID) => http.get(
   `/api/mailview/tenants/${tenantID}/infrastructure`,
-  { mode },
+  { loading: models.mailviewTenants },
+);
+
+export const setMailViewTenantInfrastructure = (tenantID, data) => http.post(
+  `/api/mailview/tenants/${tenantID}/infrastructure`,
+  data,
   { loading: models.mailviewTenants },
 );
 
@@ -737,4 +768,21 @@ export const revokeMailViewImpersonation = (grantID) => http.post(
   `/api/mailview/platform/impersonation/${grantID}/revoke`,
   {},
   { loading: models.mailviewTenants },
+);
+
+export const approveMailViewImpersonation = (grantID) => http.post(
+  `/api/mailview/platform/impersonation/${grantID}/approve`,
+  {},
+  { loading: models.mailviewTenants },
+);
+
+export const getMailViewTenantHome = () => http.get('/api/mailview/home');
+
+export const getMailViewCampaignWorkflow = (campaignID) => http.get(
+  `/api/mailview/campaigns/${campaignID}/workflow`,
+);
+
+export const transitionMailViewCampaign = (campaignID, data) => http.post(
+  `/api/mailview/campaigns/${campaignID}/workflow/transitions`,
+  data,
 );

@@ -11,6 +11,9 @@ address = "localhost:9000"
 mfa_encryption_key = ""
 tenant_routing_enabled = false
 tenant_base_domain = ""
+# DNS ownership of verified custom domains is rechecked automatically. A
+# failed recheck removes the hostname from routing and revokes TLS state.
+domain_revalidation_interval = "24h"
 
 # Root directory for tenant-scoped import uploads. Each job's CSV is written
 # under <import_storage_dir>/<tenant_id>/, isolated from every other tenant.

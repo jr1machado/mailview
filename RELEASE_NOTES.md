@@ -1,5 +1,57 @@
 # MailView — Release notes
 
+## MailView v0.5.0 — `v0.5.0` — 2026-08-10
+
+Release que entrega as Fases 3 e 4: completa o catálogo tenant, fecha o
+workflow de campanhas e acrescenta governança operacional e de segurança aos
+portais MailView.
+
+### RBAC, campanhas e portal do cliente
+
+- sete papéis tenant e seis papéis de plataforma com catálogo granular;
+- grants aditivos, denial explícito prevalente e custom roles em Growth/Enterprise;
+- invalidação de sessões após alterações sensíveis de papel/ownership;
+- workflow auditável e idempotente `draft → review → approved → scheduled → sending → completed`, com rejeição e cancelamento;
+- locks de linha e idempotency key impedem dupla transição/agendamento em retries;
+- home tenant com volume, campanhas ativas, contatos, bounces, plano, domínios e alertas;
+- contatos com tags, consentimento, fonte/data de consentimento e supressão controlada.
+
+### Portal administrativo e suporte
+
+- dashboard global com tenants, MRR/ARR observado em invoices pagas, e-mails, filas, bounces, complaints, webhooks, domínios, incidentes e infraestrutura dedicada;
+- gestão de tenant, suspensão/reativação/offboarding, quota/plano, owner, auditoria, slug e roteamento Enterprise;
+- incidentes de plataforma com severidade, vínculo opcional ao tenant, resolução e auditoria;
+- impersonation com razão obrigatória, TOTP recente, TTL máximo de 30 minutos, aprovação opcional por segundo operador, banner e revogação;
+- grants de impersonation jamais ampliam billing, MFA, segredos ou permissões de plataforma.
+
+### Dados, domínios e jobs
+
+- 17 entidades nativas da Fase 3 com `FORCE RLS`, índices tenant-first e FKs compostas;
+- API keys com escopo tenant não elevável, token de exibição única e somente SHA-256 persistido;
+- catálogo de versões de chave e suporte a ciphertext/referência externa para segredos SMTP;
+- envelopes HMAC de jobs com tenant, job, tipo, TTL e hash do payload;
+- slug reservado, troca auditada, histórico e redirect HTTP 308 temporário;
+- desafio DNS TXT/CNAME, verificação real, revalidação automática, retirada de rota e revogação TLS;
+- contrato Enterprise versionado para database, worker, SMTP, storage, KMS e namespace, sem persistir credenciais.
+
+### Segurança, build e operação
+
+- TLS 1.2/1.3, HSTS, `nosniff` e Referrer-Policy no Caddy;
+- role PostgreSQL runtime `NOSUPERUSER NOBYPASSRLS`, container UID 10001 e secrets por arquivo;
+- executável `MailView`/`MailView.exe`, archives e checksums `MailView_*`;
+- imagem OCI `ghcr.io/jr1machado/mailview:v0.5.0` multi-arquitetura;
+- documentação de arquitetura, ferramentas, funções, integrações, hardware, software e portas atualizada.
+
+### Upgrade
+
+```sh
+./MailView --upgrade --yes --config config.toml
+./MailView --config config.toml
+```
+
+Faça backup de PostgreSQL, mídia, imports, secrets e dados ACME antes do
+upgrade. Consulte [Issues conhecidos](ISSUES_CONHECIDOS.md) antes de produção.
+
 ## MailView v0.4.0 — `v0.4.0` — 2026-08-09
 
 Release que conclui o isolamento multi-tenant da Sprint/Fase 2 e consolida as funções administrativas já implementadas das Fases 3 e 4. É a primeira release em que binário, pacotes, imagens e pipeline usam o nome MailView de ponta a ponta.

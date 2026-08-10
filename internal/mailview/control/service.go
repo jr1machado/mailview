@@ -29,14 +29,37 @@ var (
 	validTenantState = map[string]struct{}{TenantStatusActive: {}, TenantStatusSuspended: {}, TenantStatusPending: {}, TenantStatusOffboarded: {}}
 )
 
-type Service struct{ db *sqlx.DB }
+type DNSResolver interface {
+	LookupTXT(context.Context, string) ([]string, error)
+	LookupCNAME(context.Context, string) (string, error)
+}
 
-func New(db *sqlx.DB) *Service { return &Service{db: db} }
+type Service struct {
+	db       *sqlx.DB
+	resolver DNSResolver
+}
+
+func New(db *sqlx.DB) *Service { return NewWithDNSResolver(db, net.DefaultResolver) }
+
+func NewWithDNSResolver(db *sqlx.DB, resolver DNSResolver) *Service {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	return &Service{db: db, resolver: resolver}
+}
+
+var reservedSlugs = map[string]struct{}{
+	"admin": {}, "api": {}, "app": {}, "assets": {}, "auth": {}, "billing": {},
+	"help": {}, "mail": {}, "status": {}, "support": {}, "www": {},
+}
 
 func NormalizeSlug(value string) (string, error) {
 	slug := strings.ToLower(strings.TrimSpace(value))
 	if !slugPattern.MatchString(slug) {
 		return "", fmt.Errorf("%w: slug must be 3-63 lowercase letters, numbers, or hyphens", ErrInvalid)
+	}
+	if _, reserved := reservedSlugs[slug]; reserved {
+		return "", fmt.Errorf("%w: slug is reserved", ErrInvalid)
 	}
 	return slug, nil
 }
@@ -127,11 +150,7 @@ func (s *Service) GetTenant(ctx context.Context, id uuid.UUID) (Tenant, error) {
 }
 
 func (s *Service) GetTenantBySlug(ctx context.Context, slug string) (Tenant, error) {
-	var out Tenant
-	err := s.db.GetContext(ctx, &out, `SELECT id, slug, name, status, created_at, updated_at FROM mv_tenants WHERE slug = $1`, strings.ToLower(strings.TrimSpace(slug)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return Tenant{}, ErrNotFound
-	}
+	out, _, err := s.ResolveTenantSlug(ctx, slug)
 	return out, err
 }
 
@@ -326,11 +345,11 @@ func (s *Service) UseRecoveryCode(ctx context.Context, userID int, code string, 
 
 func seedTenantRoles(ctx context.Context, tx *sqlx.Tx, tenantID uuid.UUID) (map[string]uuid.UUID, error) {
 	permissions := map[string]string{
-		"campaign.create.tenant": "Create campaigns", "campaign.approve.tenant": "Approve campaigns", "campaign.read.tenant": "Read campaigns", "campaign.manage.tenant": "Manage campaigns", "campaign.send.tenant": "Send campaigns", "analytics.read.tenant": "Read analytics",
+		"campaign.create.tenant": "Create campaigns", "campaign.approve.tenant": "Approve campaigns", "campaign.read.tenant": "Read campaigns", "campaign.manage.tenant": "Manage campaigns", "campaign.send.tenant": "Send campaigns", "campaign.review.tenant": "Submit campaigns for review", "campaign.schedule.tenant": "Schedule approved campaigns", "campaign.cancel.tenant": "Safely cancel campaigns", "campaign.test.tenant": "Send campaign tests", "analytics.read.tenant": "Read analytics",
 		"subscriber.read.tenant": "Read subscribers", "subscriber.manage.tenant": "Manage subscribers", "subscriber.import.tenant": "Import subscribers", "subscriber.export.tenant": "Export subscribers",
 		"list.read.tenant": "Read lists", "list.manage.tenant": "Manage lists", "template.read.tenant": "Read templates", "template.manage.tenant": "Manage templates", "media.read.tenant": "Read media", "media.manage.tenant": "Manage media", "bounce.read.tenant": "Read bounces", "bounce.manage.tenant": "Manage bounces",
 		"domain.manage.tenant": "Manage domains", "user.invite.tenant": "Invite users", "user.manage.tenant": "Manage users",
-		"audit.read.tenant": "Read audit events", "smtp.manage.tenant": "Manage SMTP", "billing.read.tenant": "Read billing", "billing.manage.tenant": "Manage billing",
+		"audit.read.tenant": "Read audit events", "smtp.manage.tenant": "Manage SMTP", "apikey.manage.tenant": "Manage API keys", "security.read.tenant": "Read security configuration", "billing.read.tenant": "Read billing", "billing.manage.tenant": "Manage billing",
 	}
 	for code, description := range permissions {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mv_permissions (code, description) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING`, code, description); err != nil {
@@ -339,11 +358,11 @@ func seedTenantRoles(ctx context.Context, tx *sqlx.Tx, tenantID uuid.UUID) (map[
 	}
 	roles := map[string][]string{
 		"Tenant Owner":     allPermissionCodes(permissions),
-		"Tenant Admin":     {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.send.tenant", "analytics.read.tenant", "subscriber.read.tenant", "subscriber.manage.tenant", "subscriber.import.tenant", "subscriber.export.tenant", "list.read.tenant", "list.manage.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant", "bounce.read.tenant", "bounce.manage.tenant", "domain.manage.tenant", "user.invite.tenant", "user.manage.tenant", "audit.read.tenant", "smtp.manage.tenant"},
-		"Campaign Manager": {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.send.tenant", "analytics.read.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant", "bounce.read.tenant"},
-		"Operator":         {"campaign.create.tenant", "campaign.read.tenant", "campaign.manage.tenant", "subscriber.read.tenant", "subscriber.manage.tenant", "subscriber.import.tenant", "list.read.tenant", "list.manage.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant"},
-		"Analyst":          {"campaign.read.tenant", "analytics.read.tenant", "subscriber.read.tenant", "subscriber.export.tenant", "list.read.tenant", "template.read.tenant", "media.read.tenant", "bounce.read.tenant", "audit.read.tenant"},
-		"Viewer":           {"campaign.read.tenant", "analytics.read.tenant", "subscriber.read.tenant", "list.read.tenant", "template.read.tenant", "media.read.tenant", "bounce.read.tenant"},
+		"Tenant Admin":     {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.send.tenant", "campaign.review.tenant", "campaign.schedule.tenant", "campaign.cancel.tenant", "campaign.test.tenant", "analytics.read.tenant", "subscriber.read.tenant", "subscriber.manage.tenant", "subscriber.import.tenant", "subscriber.export.tenant", "list.read.tenant", "list.manage.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant", "bounce.read.tenant", "bounce.manage.tenant", "domain.manage.tenant", "user.invite.tenant", "user.manage.tenant", "audit.read.tenant", "smtp.manage.tenant", "apikey.manage.tenant", "security.read.tenant"},
+		"Campaign Manager": {"campaign.create.tenant", "campaign.approve.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.send.tenant", "campaign.review.tenant", "campaign.schedule.tenant", "campaign.cancel.tenant", "campaign.test.tenant", "analytics.read.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant", "bounce.read.tenant"},
+		"Operator":         {"campaign.create.tenant", "campaign.read.tenant", "campaign.manage.tenant", "campaign.review.tenant", "campaign.test.tenant", "subscriber.read.tenant", "subscriber.manage.tenant", "subscriber.import.tenant", "list.read.tenant", "list.manage.tenant", "template.read.tenant", "template.manage.tenant", "media.read.tenant", "media.manage.tenant"},
+		"Analyst":          {"campaign.read.tenant", "analytics.read.tenant", "subscriber.read.tenant", "subscriber.export.tenant", "list.read.tenant", "template.read.tenant", "media.read.tenant", "bounce.read.tenant", "audit.read.tenant", "security.read.tenant"},
+		"Viewer":           {"campaign.read.tenant", "analytics.read.tenant", "subscriber.read.tenant", "list.read.tenant", "template.read.tenant", "media.read.tenant", "bounce.read.tenant", "security.read.tenant"},
 		"Billing Manager":  {"billing.read.tenant", "billing.manage.tenant"},
 	}
 	out := make(map[string]uuid.UUID, len(roles))

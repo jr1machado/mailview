@@ -26,7 +26,7 @@ func TestRLSIsolationIntegration(t *testing.T) {
 	if err := migrations.Upgrade(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='mv_rls_test') THEN CREATE ROLE mv_rls_test NOINHERIT; END IF; END $$; GRANT USAGE ON SCHEMA public TO mv_rls_test; GRANT SELECT, INSERT, UPDATE, DELETE ON mv_tenant_settings, subscribers, lists, subscriber_lists, templates, campaigns, campaign_lists, campaign_views, media, campaign_media, links, link_clicks, bounces TO mv_rls_test; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mv_rls_test`); err != nil {
+	if _, err := db.ExecContext(ctx, `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='mv_rls_test') THEN CREATE ROLE mv_rls_test NOINHERIT; END IF; END $$; GRANT USAGE ON SCHEMA public TO mv_rls_test; GRANT SELECT, INSERT, UPDATE, DELETE ON mv_tenant_settings, mv_tenant_branding, subscribers, lists, subscriber_lists, templates, campaigns, campaign_lists, campaign_views, media, campaign_media, links, link_clicks, bounces TO mv_rls_test; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mv_rls_test`); err != nil {
 		t.Fatal(err)
 	}
 	first, second := uuid.Must(uuid.NewV4()), uuid.Must(uuid.NewV4())
@@ -42,6 +42,10 @@ func TestRLSIsolationIntegration(t *testing.T) {
 				return err
 			}
 			_, err := tx.ExecContext(scoped, `INSERT INTO mv_tenant_settings (tenant_id, key, value) VALUES ($1, 'branding.name', '{"ok": true}')`, tenantID)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(scoped, `INSERT INTO mv_tenant_branding(tenant_id,product_name) VALUES($1,$2)`, tenantID, "MailView "+tenantID.String()[:8])
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -146,6 +150,12 @@ func TestRLSIsolationIntegration(t *testing.T) {
 			if count != 1 {
 				t.Fatalf("tenant %s read %d settings", tenantID, count)
 			}
+			if err := tx.GetContext(scoped, &count, `SELECT count(*) FROM mv_tenant_branding`); err != nil {
+				return err
+			}
+			if count != 1 {
+				t.Fatalf("tenant %s read %d branding rows", tenantID, count)
+			}
 			return nil
 		}); err != nil {
 			t.Fatal(err)
@@ -197,10 +207,17 @@ func TestRLSIsolationIntegration(t *testing.T) {
 	if err := tx.GetContext(ctx, &unscopedCount, `SELECT count(*) FROM lists WHERE tenant_id <> '00000000-0000-0000-0000-000000000001'`); err != nil {
 		t.Fatal(err)
 	}
+	var unscopedNativeCount int
+	if err := tx.GetContext(ctx, &unscopedNativeCount, `SELECT count(*) FROM mv_tenant_branding`); err != nil {
+		t.Fatal(err)
+	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if unscopedCount != 0 {
 		t.Fatalf("context-free role saw %d SaaS tenant lists", unscopedCount)
+	}
+	if unscopedNativeCount != 0 {
+		t.Fatalf("context-free role saw %d native MailView branding rows", unscopedNativeCount)
 	}
 }

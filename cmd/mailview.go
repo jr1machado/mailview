@@ -58,6 +58,10 @@ func (a *App) requireImpersonationAdmin(next echo.HandlerFunc) echo.HandlerFunc 
 	return a.requirePlatformPermission("support.impersonate.platform")(next)
 }
 
+func (a *App) requirePlatformIncidentAdmin(next echo.HandlerFunc) echo.HandlerFunc {
+	return a.requirePlatformPermission("incident.manage.platform")(next)
+}
+
 func (a *App) CreateMailViewTenant(c echo.Context) error {
 	var in control.CreateTenantInput
 	if err := c.Bind(&in); err != nil {
@@ -102,6 +106,22 @@ func (a *App) UpdateMailViewTenantStatus(c echo.Context) error {
 		return mailviewHTTPError(err)
 	}
 	out, err := a.mailview.UpdateTenantStatus(c.Request().Context(), id, in.Status, mailviewActor(c))
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	return c.JSON(http.StatusOK, okResp{Data: out})
+}
+
+func (a *App) ChangeMailViewTenantSlug(c echo.Context) error {
+	tenantID, err := mailviewUUIDParam(c, "tenantID")
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	var in control.ChangeTenantSlugInput
+	if err := c.Bind(&in); err != nil {
+		return mailviewHTTPError(err)
+	}
+	out, err := a.mailview.ChangeTenantSlug(c.Request().Context(), tenantID, in, mailviewActor(c))
 	if err != nil {
 		return mailviewHTTPError(err)
 	}
@@ -280,13 +300,23 @@ func (a *App) SetMailViewTenantInfrastructure(c echo.Context) error {
 	if err != nil {
 		return mailviewHTTPError(err)
 	}
-	var in struct {
-		Mode string `json:"mode"`
-	}
+	var in control.TenantInfrastructureInput
 	if err := c.Bind(&in); err != nil {
 		return mailviewHTTPError(err)
 	}
-	out, err := a.mailview.SetTenantInfrastructureMode(c.Request().Context(), tenantID, in.Mode, mailviewActor(c))
+	out, err := a.mailview.ConfigureTenantInfrastructure(c.Request().Context(), tenantID, in, mailviewActor(c))
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	return c.JSON(http.StatusOK, okResp{Data: out})
+}
+
+func (a *App) GetMailViewTenantInfrastructure(c echo.Context) error {
+	tenantID, err := mailviewUUIDParam(c, "tenantID")
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	out, err := a.mailview.ResolveTenantInfrastructure(c.Request().Context(), tenantID)
 	if err != nil {
 		return mailviewHTTPError(err)
 	}
@@ -434,6 +464,37 @@ func (a *App) RevokeMailViewTenantDomain(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{Data: out})
 }
 
+func (a *App) SetMailViewTenantDomainTLSStatus(c echo.Context) error {
+	tenantID, err := mailviewUUIDParam(c, "tenantID")
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	domainID, err := mailviewUUIDParam(c, "domainID")
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	var in struct {
+		Status         string `json:"status"`
+		CertificateRef string `json:"certificate_ref"`
+	}
+	if err := c.Bind(&in); err != nil {
+		return mailviewHTTPError(err)
+	}
+	out, err := a.mailview.SetTenantDomainTLSStatus(c.Request().Context(), tenantID, domainID, in.Status, in.CertificateRef, mailviewActor(c))
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	return c.JSON(http.StatusOK, okResp{Data: out})
+}
+
+func (a *App) RevalidateMailViewTenantDomains(c echo.Context) error {
+	checked, err := a.mailview.RevalidateDueDomains(c.Request().Context(), mailviewActor(c), 100)
+	if err != nil {
+		return mailviewHTTPError(err)
+	}
+	return c.JSON(http.StatusOK, okResp{Data: map[string]int{"checked": checked}})
+}
+
 func (a *App) ListMailViewTenantPlans(c echo.Context) error {
 	out, err := a.mailview.ListTenantPlans(c.Request().Context())
 	if err != nil {
@@ -497,7 +558,7 @@ func mailviewHTTPError(err error) error {
 	switch {
 	case errors.Is(err, control.ErrNotFound), errors.Is(err, control.ErrUserNotFound):
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, control.ErrConflict):
+	case errors.Is(err, control.ErrConflict), errors.Is(err, control.ErrInvalidCampaignTransition):
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, control.ErrInvalid), errors.Is(err, control.ErrInvalidRole):
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -505,7 +566,7 @@ func mailviewHTTPError(err error) error {
 		return echo.NewHTTPError(http.StatusForbidden, err.Error())
 	case errors.Is(err, control.ErrMFANotRecent):
 		return echo.NewHTTPError(http.StatusForbidden, err.Error())
-	case errors.Is(err, control.ErrGrantExpired), errors.Is(err, control.ErrGrantNotOwned):
+	case errors.Is(err, control.ErrGrantExpired), errors.Is(err, control.ErrGrantNotOwned), errors.Is(err, control.ErrGrantPendingApproval):
 		return echo.NewHTTPError(http.StatusForbidden, err.Error())
 	default:
 		return err

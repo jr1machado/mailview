@@ -42,7 +42,7 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
 
-	svc := New(db)
+	svc := NewWithDNSResolver(db, fakeDNSResolver{})
 	actor := Actor{UserID: 101, RequestID: "test-request"}
 
 	if err := svc.EnsureNoBypassRLS(ctx); err != nil {
@@ -112,6 +112,14 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
+	slugChange, err := svc.ChangeTenantSlug(ctx, tenantB.ID, ChangeTenantSlugInput{Slug: "acme-renamed", RedirectDays: 7}, actor)
+	if err != nil || slugChange.Tenant.Slug != "acme-renamed" {
+		t.Fatalf("ChangeTenantSlug: %#v, %v", slugChange, err)
+	}
+	resolvedAlias, canonical, err := svc.ResolveTenantSlug(ctx, "acme-b")
+	if err != nil || canonical || resolvedAlias.ID != tenantB.ID {
+		t.Fatalf("ResolveTenantSlug alias: %#v, canonical=%t, %v", resolvedAlias, canonical, err)
+	}
 
 	domain, err := svc.CreateTenantDomain(ctx, tenantA.ID, CreateTenantDomainInput{Hostname: "mail.acme.example", Purpose: "sending"}, actor)
 	if err != nil {
@@ -123,6 +131,7 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 	if _, err := svc.CreateTenantDomain(ctx, tenantB.ID, CreateTenantDomainInput{Hostname: "mail.acme.example", Purpose: "sending"}, actor); err == nil {
 		t.Fatal("cross-tenant hostname reuse was allowed")
 	}
+	svc.resolver = fakeDNSResolver{txt: map[string][]string{domain.VerificationName: {domain.VerificationValue}}}
 
 	verified, err := svc.MarkTenantDomainVerified(ctx, tenantA.ID, domain.ID, actor)
 	if err != nil || verified.Status != "verified" || verified.LastVerifiedAt == nil {
@@ -151,5 +160,16 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 	plans, err := svc.ListTenantPlans(ctx)
 	if err != nil || len(plans) != 3 {
 		t.Fatalf("plans = %d, %v", len(plans), err)
+	}
+
+	if _, err := svc.ConfigureTenantInfrastructure(ctx, tenantB.ID, TenantInfrastructureInput{Mode: "dedicated"}, actor); err == nil {
+		t.Fatal("incomplete dedicated route was accepted")
+	}
+	route, err := svc.ConfigureTenantInfrastructure(ctx, tenantB.ID, TenantInfrastructureInput{
+		Mode: "dedicated", DatabaseRef: "secret/db-acme", WorkerRef: "queue/acme", SMTPRef: "secret/smtp-acme",
+		StorageRef: "bucket/acme", EncryptionKeyRef: "kms/acme", DockerNamespace: "mailview-acme",
+	}, actor)
+	if err != nil || route.Mode != "dedicated" || route.RoutingVersion < 1 || route.ActivatedAt == nil {
+		t.Fatalf("ConfigureTenantInfrastructure = %#v, %v", route, err)
 	}
 }

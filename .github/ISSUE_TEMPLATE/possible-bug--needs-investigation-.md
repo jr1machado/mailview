@@ -8,7 +8,7 @@ assignees: ''
 ---
 
 **Version:**
- - listmonk: [eg: v1.0.0]
+ - MailView: [eg: v0.5.0]
  - OS: [e.g. Fedora]
 
 **Description of the bug and steps to reproduce:**

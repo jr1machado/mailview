@@ -1,4 +1,4 @@
-# Referência operacional do MailView v0.4.0
+# Referência operacional do MailView v0.5.0
 
 ## Stack e capacidade
 
@@ -15,12 +15,33 @@ Não há benchmark/SLA. Baseline: piloto 2 vCPU/2–4 GiB/20 GiB SSD; produção
 | interna | 5432 | MailView → PostgreSQL |
 | compose raiz | 10443 | host → MailView 9000 |
 | compose raiz | 127.0.0.1:15432 | host → PostgreSQL |
-| dev | 9000/8080 | backend/Vite |
-| dev | 1025/8025/8070 | MailHog SMTP/UI e Adminer |
+| dev | 9000/8080 | host → backend/Vite |
+| dev | 5432 | host → PostgreSQL de desenvolvimento |
+| dev | 1025/8025/8070 | host → MailHog SMTP/UI e Adminer |
 | saída | 25/465/587 | MailView → SMTP |
-| saída | 443 | MailView → S3/OIDC/postback |
+| saída | 110/995 | MailView → mailbox POP/POP3S de bounces |
+| saída | 53 UDP/TCP | MailView → resolver DNS para verificação de domínio |
+| saída | 80/443 | MailView/Caddy → ACME, S3, OIDC, captcha, postback e APIs |
 
 Não exponha 5432, 9000 nem portas dev à Internet.
+
+O admin API padrão do Caddy usa `2019/tcp` somente no loopback interno do
+container e não é publicado pelo Compose. Webhooks, tracking, unsubscribe,
+archive e formulários públicos compartilham a entrada HTTPS `443/tcp`.
+
+## Dimensionamento e recursos
+
+| Perfil | CPU | Memória | Storage | Observações |
+|---|---:|---:|---:|---|
+| desenvolvimento | 2 vCPU | 2–4 GiB | 20 GiB SSD | aplicação, PostgreSQL e MailHog no mesmo host |
+| piloto/produção inicial | app 2–4 vCPU; DB 4 vCPU | app 4–8 GiB; DB 8 GiB | 50+ GiB SSD | volumes persistentes e backup externo |
+| alto volume | app ativo + réplicas passivas | medir heap, pool e batch | SSD provisionado por IOPS e retenção | S3, PostgreSQL dedicado e teste de carga obrigatório |
+
+Capacidade depende principalmente de latência/limite do SMTP, número de
+destinatários, tamanho do HTML/anexos, tracking, retenção de eventos e IOPS.
+Não há benchmark oficial nem SLA nesta release. Reserve espaço adicional para
+WAL, índices, backups, mídia e CSVs temporários; configure alertas de disco
+antes de 80% de ocupação.
 
 ## Bootstrap
 
@@ -51,7 +72,7 @@ Use UID 10001, filesystem read-only, TLS, secrets `0600`, role `NOSUPERUSER NOBY
 ```sh
 go vet ./...
 go test ./...
-make build && ./mailview --version
+make build && ./MailView --version
 (cd frontend && yarn lint && yarn build)
 docker compose config --quiet
 docker compose --env-file deploy/.env.example -f deploy/compose.production.yml config --quiet
@@ -59,4 +80,4 @@ docker compose --env-file deploy/.env.example -f deploy/compose.production.yml c
 
 Testes integrados usam um `MAILVIEW_TEST_DSN` administrativo para migrations/RLS e depois um DSN de aplicação restrita para `control`, `dataplane` e `importjob`. Nunca use banco de produção.
 
-Artefatos: `mailview`, `MailView_<versão>_<os>_<arch>.tar.gz`, imagem `ghcr.io/jr1machado/mailview` e tag SemVer `v<semver>`.
+Artefatos: `MailView`, `MailView_<versão>_<os>_<arch>.tar.gz`, `MailView_<versão>_checksums.txt`, imagem OCI `ghcr.io/jr1machado/mailview` e tag SemVer `v<semver>`.

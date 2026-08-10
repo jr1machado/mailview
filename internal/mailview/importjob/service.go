@@ -19,9 +19,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/jmoiron/sqlx"
+	mvjob "github.com/knadh/listmonk/internal/mailview/job"
 	"github.com/knadh/listmonk/internal/mailview/tenant"
 	"github.com/lib/pq"
 )
@@ -65,6 +67,7 @@ type Service struct {
 	db         *sqlx.DB
 	storageDir string
 	signingKey []byte
+	jobSigner  *mvjob.Signer
 }
 
 // New builds the import job service. encodedKey is a base64-encoded 32-byte
@@ -84,7 +87,36 @@ func New(db *sqlx.DB, storageDir, encodedKey string) (*Service, error) {
 		return nil, errors.New("MailView import signing key must decode to 32 bytes")
 	}
 	s.signingKey = key
+	s.jobSigner, err = mvjob.NewSigner(encodedKey)
+	if err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// WorkerEnvelope signs tenant_id together with the job identity. It is the
+// only payload accepted by detached/asynchronous import workers.
+func (s *Service) WorkerEnvelope(ctx context.Context, jobID uuid.UUID) (mvjob.Envelope, error) {
+	if s.jobSigner == nil {
+		return mvjob.Envelope{}, ErrSigningUnavailable
+	}
+	scope, ok := tenant.FromContext(ctx)
+	if !ok {
+		return mvjob.Envelope{}, tenant.ErrMissingContext
+	}
+	return s.jobSigner.Sign(jobID, scope.TenantID, "subscriber_import.process", map[string]string{"job_id": jobID.String()}, 24*time.Hour)
+}
+
+func (s *Service) ProcessEnvelope(ctx context.Context, envelope mvjob.Envelope) error {
+	if s.jobSigner == nil {
+		return ErrSigningUnavailable
+	}
+	tenantID, err := s.jobSigner.Verify(envelope)
+	if err != nil || envelope.Type != "subscriber_import.process" || envelope.JobID == uuid.Nil {
+		return ErrInvalid
+	}
+	scoped := tenant.WithContext(ctx, tenant.Context{TenantID: tenantID, RequestID: "job:" + envelope.JobID.String()})
+	return s.ProcessJob(scoped, envelope.JobID)
 }
 
 // CreateJob validates that every requested list belongs to the caller's

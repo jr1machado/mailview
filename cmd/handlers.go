@@ -2,13 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/gofrs/uuid/v5"
 	"github.com/knadh/listmonk/internal/auth"
+	"github.com/knadh/listmonk/internal/mailview/tenant"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -31,6 +36,35 @@ var (
 
 // registerHandlers registers HTTP handlers.
 func initHTTPHandlers(e *echo.Echo, a *App) {
+	// Every request receives a stable correlation ID. The completion log adds
+	// tenant/user context when resolution/authentication made it available.
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			requestID := strings.TrimSpace(c.Request().Header.Get("X-Request-ID"))
+			if requestID == "" {
+				requestID = uuid.Must(uuid.NewV4()).String()
+				c.Request().Header.Set("X-Request-ID", requestID)
+			}
+			c.Response().Header().Set("X-Request-ID", requestID)
+			started := time.Now()
+			err := next(c)
+			userID, tenantID := 0, ""
+			if user, ok := c.Get(auth.UserHTTPCtxKey).(auth.User); ok {
+				userID = user.ID
+			}
+			if scoped, ok := c.Get("mailview_tenant_context").(context.Context); ok {
+				if value, found := tenant.FromContext(scoped); found {
+					tenantID = value.TenantID.String()
+					if value.UserID != 0 {
+						userID = value.UserID
+					}
+				}
+			}
+			a.log.Printf("request_id=%s tenant_id=%s user_id=%d method=%s path=%s status=%d duration=%s", requestID, tenantID, userID, c.Request().Method, c.Request().URL.Path, c.Response().Status, time.Since(started))
+			return err
+		}
+	})
+
 	// Default error handler.
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		// Generic, non-echo error. Log it.
@@ -105,6 +139,12 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		g.GET("/api/lang/:lang", a.GetI18nLang)
 		g.GET("/api/dashboard/charts", a.mailviewDataPerm(a.GetDashboardCharts, "analytics.read.tenant"))
 		g.GET("/api/dashboard/counts", a.mailviewDataPerm(a.GetDashboardCounts, "analytics.read.tenant"))
+		g.GET("/api/mailview/home", a.GetMailViewTenantHome)
+		g.GET("/api/mailview/api-keys", a.ListMailViewAPIKeys)
+		g.POST("/api/mailview/api-keys", a.CreateMailViewAPIKey)
+		g.DELETE("/api/mailview/api-keys/:keyID", a.RevokeMailViewAPIKey)
+		g.GET("/api/mailview/contacts/:id/governance", a.GetMailViewContactGovernance)
+		g.PUT("/api/mailview/contacts/:id/governance", a.UpdateMailViewContactGovernance)
 
 		g.GET("/api/settings", pm(a.GetSettings, "settings:get"))
 		g.PUT("/api/settings", pm(a.UpdateSettings, "settings:manage"))
@@ -179,6 +219,8 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		g.PUT("/api/campaigns/:id/archive", a.mailviewDataPerm(hasID(a.UpdateCampaignArchive), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
 		g.DELETE("/api/campaigns", a.mailviewDataPerm(a.DeleteCampaigns, "campaign.manage.tenant", "campaigns:manage", "campaigns:manage_all"))
 		g.DELETE("/api/campaigns/:id", a.mailviewDataPerm(hasID(a.DeleteCampaign), "campaign.manage.tenant", "campaigns:manage_all", "campaigns:manage"))
+		g.GET("/api/mailview/campaigns/:id/workflow", a.GetMailViewCampaignWorkflow)
+		g.POST("/api/mailview/campaigns/:id/workflow/transitions", a.TransitionMailViewCampaign)
 
 		g.GET("/api/media", a.mailviewDataPerm(a.GetAllMedia, "media.read.tenant", "media:get"))
 		g.GET("/api/media/:id", a.mailviewDataPerm(hasID(a.GetMedia), "media.read.tenant", "media:get"))
@@ -231,6 +273,7 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		cp.POST("/tenants", a.CreateMailViewTenant)
 		cp.GET("/tenants/:tenantID", a.GetMailViewTenant)
 		cp.PATCH("/tenants/:tenantID", a.UpdateMailViewTenantStatus)
+		cp.POST("/tenants/:tenantID/slug", a.ChangeMailViewTenantSlug)
 		cp.GET("/tenants/:tenantID/roles", a.ListMailViewRoles)
 		cp.GET("/tenants/:tenantID/memberships", a.ListMailViewMemberships)
 		cp.POST("/tenants/:tenantID/memberships", a.CreateMailViewMembership)
@@ -249,12 +292,15 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		cp.POST("/tenants/:tenantID/domains", a.CreateMailViewTenantDomain)
 		cp.POST("/tenants/:tenantID/domains/:domainID/verify", a.VerifyMailViewTenantDomain)
 		cp.POST("/tenants/:tenantID/domains/:domainID/revoke", a.RevokeMailViewTenantDomain)
+		cp.POST("/tenants/:tenantID/domains/:domainID/tls", a.SetMailViewTenantDomainTLSStatus)
+		cp.POST("/domains/revalidate", a.RevalidateMailViewTenantDomains)
 		cp.GET("/tenants/:tenantID/quota", a.GetMailViewTenantQuota)
 		cp.PUT("/tenants/:tenantID/quota", a.SetMailViewTenantQuotaPlan)
 		cp.GET("/plans", a.ListMailViewTenantPlans)
 		cp.GET("/dashboard", a.GetMailViewDashboard)
 		cp.POST("/tenants/:tenantID/owner", a.ResetMailViewTenantOwner)
 		cp.POST("/tenants/:tenantID/infrastructure", a.SetMailViewTenantInfrastructure)
+		cp.GET("/tenants/:tenantID/infrastructure", a.GetMailViewTenantInfrastructure)
 		cp.POST("/tenants/:tenantID/roles", a.CreateMailViewTenantRole)
 		cp.POST("/tenants/:tenantID/roles/:roleID/permissions/:code/deny", a.DenyMailViewRolePermission)
 		cp.DELETE("/tenants/:tenantID/roles/:roleID/permissions/:code/deny", a.AllowMailViewRolePermission)
@@ -275,6 +321,12 @@ func initHTTPHandlers(e *echo.Echo, a *App) {
 		cpImpersonation.POST("", a.StartMailViewImpersonation)
 		cpImpersonation.GET("", a.ListMailViewImpersonationGrants)
 		cpImpersonation.POST("/:grantID/revoke", a.RevokeMailViewImpersonation)
+		cpImpersonation.POST("/:grantID/approve", a.ApproveMailViewImpersonation)
+
+		cpIncidents := g.Group("/api/mailview/platform/incidents", a.requirePlatformIncidentAdmin)
+		cpIncidents.GET("", a.ListMailViewIncidents)
+		cpIncidents.POST("", a.CreateMailViewIncident)
+		cpIncidents.POST("/:incidentID/resolve", a.ResolveMailViewIncident)
 
 		// Available to any authenticated user with TOTP enabled. Codes are
 		// displayed only in this response and persisted as bcrypt hashes.

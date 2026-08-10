@@ -20,6 +20,7 @@ deploy/secrets/
 node_modules
 /listmonk
 /mailview
+/MailView
 dist/*
 uploads/
 mailview-imports/

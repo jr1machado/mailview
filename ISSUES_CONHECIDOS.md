@@ -1,4 +1,4 @@
-# MailView v0.4.0 — Issues conhecidos
+# MailView v0.5.0 — Issues conhecidos
 
 Limitações confirmadas desta release; roadmap não deve ser confundido com recurso entregue.
 
@@ -14,11 +14,15 @@ Limitações confirmadas desta release; roadmap não deve ser confundido com rec
 ## Produto e multi-tenancy
 
 - Planos, quotas e usage são modelo/gestão; limites não bloqueiam contatos, envios, domínios ou seats.
-- Billing, invoices, MRR/ARR e gateway de pagamento não estão implementados.
-- `dedicated_requested`/`dedicated` registra intenção/estado; não provisiona banco, SMTP, storage, worker ou namespace.
-- SMTP/settings continuam globais. RBAC expõe `smtp.manage.tenant`, mas não há perfil SMTP isolado por tenant.
-- Verificação de domínio é manual; não consulta DNS nem provisiona TLS automaticamente por tenant.
-- Não há workflow formal separado de review/approval, embora permissões de campanha existam.
+- Billing accounts, subscriptions e invoices têm modelo tenant/RLS; o dashboard deriva MRR/ARR das invoices pagas, mas gateway, cobrança recorrente e conciliação não estão implementados.
+- `dedicated_requested`/`dedicated` valida e publica o contrato de roteamento; não provisiona fisicamente banco, SMTP, storage, worker, KMS ou namespace.
+- SMTP profiles tenant-scoped têm modelo persistente, mas o campaign manager ainda usa a configuração SMTP herdada até o dispatcher da próxima fase.
+- Verificação e revalidação DNS são automáticas; emissão ACME permanece no proxy/controller externo, que reporta o estado TLS pela API.
+- Webhooks, exports e mensagens transacionais da Fase 3 têm schema/isolamento, mas seus dispatchers continuam no roadmap.
+- O workflow formal de campanha existe como sidecar/API e sincroniza estados executáveis com o core; o editor herdado ainda não oferece todos os botões de review/approval/reject.
+- API keys MailView podem ser criadas/revogadas com hash seguro, mas a autenticação HTTP ainda usa os mecanismos herdados até o middleware MailView consumir `mv_api_keys`.
+- Governança de contatos (tags/consentimento/supressão) possui API própria; os campos ainda não aparecem em todos os formulários herdados.
+- Incidentes possuem API e contagem no dashboard, mas ainda não há tela completa de triagem no portal.
 
 ## Importação e dados
 
@@ -36,7 +40,7 @@ Limitações confirmadas desta release; roadmap não deve ser confundido com rec
 
 ## Entregabilidade
 
-- SPF, DKIM, DMARC, reputação, warm-up, throttling do provedor e feedback loops dependem da operação/provedor.
+- O wizard valida ownership TXT/CNAME. SPF, DKIM, DMARC, CNAME de tracking, reputação, warm-up, throttling e feedback loops continuam dependentes da operação/provedor.
 - Não há spam score, reputação automática, suppressions globais externas ou otimização por IA.
 - Webhooks dependem da configuração correta de assinatura/secret de cada provedor.
 

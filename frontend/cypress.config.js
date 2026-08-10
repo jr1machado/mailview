@@ -4,9 +4,9 @@ module.exports = defineConfig({
   env: {
     apiUrl: 'http://localhost:9000',
     serverInitCmd:
-      'pkill -9 mailview; cd ../ && LISTMONK_ADMIN_USER=admin LISTMONK_ADMIN_PASSWORD=listmonk ./mailview --install --yes && setsid ./mailview </dev/null >/dev/null 2>&1 &',
+      'pkill -9 MailView; cd ../ && LISTMONK_ADMIN_USER=admin LISTMONK_ADMIN_PASSWORD=listmonk ./MailView --install --yes && setsid ./MailView </dev/null >/dev/null 2>&1 &',
     serverInitBlankCmd:
-      'pkill -9 mailview; cd ../ && ./mailview --install --yes && setsid ./mailview </dev/null >/dev/null 2>&1 &',
+      'pkill -9 MailView; cd ../ && ./MailView --install --yes && setsid ./MailView </dev/null >/dev/null 2>&1 &',
     LISTMONK_ADMIN_USER: 'admin',
     LISTMONK_ADMIN_PASSWORD: 'listmonk',
   },

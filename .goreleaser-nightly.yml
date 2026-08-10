@@ -10,7 +10,7 @@ before:
 
 builds:
   - id: mailview
-    binary: mailview
+    binary: MailView
     main: ./cmd
     goos: [linux, windows, darwin, freebsd, openbsd, netbsd]
     goarch: [amd64, arm64, arm]
@@ -26,7 +26,7 @@ archives:
   - id: mailview
     formats: [tar.gz]
     name_template: "MailView_nightly_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}"
-    files: [README.md, LICENSE]
+    files: [README.md, RELEASE_NOTES.md, ISSUES_CONHECIDOS.md, LICENSE]
 
 dockers:
   - use: buildx
