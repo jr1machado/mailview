@@ -1,5 +1,65 @@
 # MailView — Release notes
 
+## MailView v0.6.0 — `v0.6.0` — 2026-08-10
+
+Release de clareza operacional e consolidação documental. A v0.6.0 torna a
+separação de ambientes por cliente visível no produto e publica uma descrição
+verificável do escopo, arquitetura, integrações, requisitos e limites atuais do
+fork independente MailView.
+
+### Ambientes e experiência multi-tenant
+
+- novo mapa visual no Control Plane distribui tenants em três faixas:
+  compartilhado, em provisionamento (`dedicated_requested`) e dedicado;
+- cada cliente possui cartão identificável por nome, slug, status e UUID
+  abreviado, com representação de banco, fila, SMTP e storage;
+- o mapa consulta o contrato real de `mv_tenant_infrastructure`, em vez de
+  inferir isolamento pelo plano comercial;
+- alterações de infraestrutura refletem imediatamente na distribuição visual;
+- clique no cartão abre o detalhe operacional existente de domínio, quota,
+  owner, slug e referências de infraestrutura;
+- portal tenant passa a exibir uma faixa persistente com hostname, limite de
+  tenant e identificador abreviado, reduzindo risco de operar no cliente errado;
+- layout responsivo e estados vazios preservam leitura em desktop e mobile.
+
+### Documentação, produto e operação
+
+- README consolida declaração de fork independente, visão comercial para
+  C-Levels, escopo e exclusões, arquitetura, organização do código, fluxos de
+  comunicação, hardware, software, portas, build, instalação e nomenclatura;
+- documentação técnica atualizada para v0.6.0 cobre Control/Data Plane, RLS,
+  RBAC, funções, APIs, ferramentas, integrações, topologia e operação;
+- matriz funcional diferencia recurso executável, modelo persistente,
+  integração externa e item ainda pendente, evitando promessa comercial
+  superior ao produto entregue;
+- `ISSUES_CONHECIDOS.md` registra limites de escala, multi-tenancy, billing,
+  entregabilidade, segurança, frontend e plataformas suportadas;
+- metadados de versão sincronizados em `VERSION`, frontend, Docker e Compose.
+
+### Identidade dos artefatos
+
+- executável: `MailView` ou `MailView.exe`;
+- pacote: `MailView_0.6.0_<os>_<arch>.tar.gz`;
+- checksum: `MailView_0.6.0_checksums.txt`;
+- release: `MailView v0.6.0`;
+- imagem OCI: `ghcr.io/jr1machado/mailview:v0.6.0` — minúsculas são uma
+  restrição do registry, não uma mudança da marca;
+- tag Git: `v0.6.0`.
+
+### Compatibilidade e upgrade
+
+Não há migration de banco exclusiva desta release. O módulo Go, schema core e
+prefixo `LISTMONK_*` continuam preservados por compatibilidade técnica; novos
+artefatos permanecem identificados como MailView.
+
+```sh
+./MailView --upgrade --yes --config config.toml
+./MailView --config config.toml
+```
+
+Faça backup de PostgreSQL, mídia, imports, secrets e dados ACME antes de trocar
+a imagem ou o binário. Consulte [Issues conhecidos](ISSUES_CONHECIDOS.md).
+
 ## MailView v0.5.0 — `v0.5.0` — 2026-08-10
 
 Release que entrega as Fases 3 e 4: completa o catálogo tenant, fecha o
@@ -83,7 +143,7 @@ Release que conclui o isolamento multi-tenant da Sprint/Fase 2 e consolida as fu
 
 ### Produto, build e operação
 
-- binário renomeado para `mailview` e frontend package `mailview` 0.4.0;
+- binário renomeado para `MailView` e frontend package `mailview` 0.4.0;
 - arquivos GoReleaser `MailView_0.4.0_<os>_<arch>.tar.gz` e imagens `ghcr.io/jr1machado/mailview`;
 - workflow acionado por tag SemVer `v*` e título/artefatos identificados como MailView;
 - Go 1.26.5 e dependências `goldmark`, `x/text` e `x/image` atualizadas para corrigir os achados alcançáveis do `govulncheck`;
@@ -98,8 +158,8 @@ O módulo Go `github.com/knadh/listmonk`, prefixo env `LISTMONK_*`, schema core 
 Upgrade:
 
 ```sh
-./mailview --upgrade --yes --config config.toml
-./mailview --config config.toml
+./MailView --upgrade --yes --config config.toml
+./MailView --config config.toml
 ```
 
 Faça backup antes. A role runtime deve ser `NOSUPERUSER NOBYPASSRLS`. Novos imports e enrollments TOTP exigem chaves base64 de 32 bytes.

@@ -4,7 +4,7 @@ Plataforma self-hosted de campanhas, listas e comunicação por e-mail com isola
 
 > **Fork independente.** MailView nasceu do código aberto do [listmonk](https://github.com/knadh/listmonk), sob AGPL-3.0, mas possui mantenedor, roadmap, releases, arquitetura SaaS e identidade próprios. Este repositório não é afiliado nem representa o projeto upstream. O caminho do módulo Go `github.com/knadh/listmonk` e o prefixo de configuração `LISTMONK_*` foram preservados exclusivamente para compatibilidade técnica; binários, pacotes, imagens, tags e releases deste fork usam **MailView**.
 
-Release atual: **MailView v0.5.0** (`v0.5.0`) — 10 de agosto de 2026.
+Release atual: **MailView v0.6.0** (`v0.6.0`) — 10 de agosto de 2026.
 
 ## Visão comercial
 
@@ -35,9 +35,28 @@ As dores resolvidas incluem contas compartilhadas, falta de rastreabilidade, ris
 
 O público-alvo primário é composto por SaaS B2B, agências, holdings, equipes de
 plataforma e organizações reguladas com capacidade de operar PostgreSQL,
-entregabilidade e infraestrutura. MailView v0.5.0 é uma base self-hosted; não
+entregabilidade e infraestrutura. MailView v0.6.0 é uma base self-hosted; não
 substitui, por si só, um gateway de cobrança, um serviço gerenciado de
 entregabilidade ou uma plataforma HA pronta.
+
+## Escopo da release e fronteiras
+
+Esta release cobre o produto executável, sua interface administrativa e de
+tenant, APIs, migrations, segurança multi-tenant, build, containers, referência
+de deploy e documentação operacional. O suporte oficial desta release parte da
+topologia Caddy + MailView + PostgreSQL descrita neste repositório.
+
+Estão dentro do escopo: administração de tenants, RBAC, campanhas e contatos,
+importação, conteúdo, envio via SMTP/messenger, tracking, domínios, auditoria,
+MFA, suporte controlado, catálogo de planos e contrato de infraestrutura
+dedicada. São integrações externas necessárias ou opcionais: relay SMTP,
+DNS/ACME, storage S3, OIDC, POP3 de bounces, captcha e postbacks HTTP.
+
+Não estão incluídos como serviço pronto nesta versão: gateway financeiro,
+provisionamento automático de recursos dedicados, HA do banco, fila distribuída,
+autoscaling, observabilidade Prometheus/OpenTelemetry nativa ou operação
+gerenciada. Modelos persistentes sem dispatcher/enforcement são identificados
+explicitamente na matriz funcional e em `ISSUES_CONHECIDOS.md`.
 
 ## O que está implementado
 
@@ -54,6 +73,8 @@ O MailView acrescenta nesta release:
 - importação CSV assíncrona, idempotente, com arquivo e envelope tenant/job assinados por HMAC, progresso e cancelamento;
 - storage local ou S3 com prefixo de tenant e proteção contra traversal;
 - portal de administração da plataforma para tenants, memberships, slugs, DNS/domínios, planos/quotas, owner, roteamento Enterprise, RBAC e impersonação;
+- mapa visual de ambientes que distribui cada cliente entre infraestrutura compartilhada, em provisionamento ou dedicada, exibindo a fronteira e os recursos de banco, fila, SMTP e storage;
+- faixa persistente no portal do cliente com hostname e identificador abreviado do tenant ativo, reduzindo erro operacional entre ambientes;
 - revalidação DNS periódica com retirada automática do host e revogação do estado TLS quando a propriedade é perdida;
 - catálogo Fase 3 para branding, sessões/API keys, billing, SMTP/senders, DNS, complaints/events, exports, webhooks e transacionais, protegido por RLS;
 - workflow Fase 4 de campanhas com revisão, aprovação, rejeição, agendamento e cancelamento idempotentes;
@@ -75,7 +96,7 @@ Internet
 Caddy / proxy TLS
   │ HTTP 9000 (rede interna)
   ▼
-mailview — binário Go único
+MailView — binário Go único
   ├─ API REST e páginas públicas
   ├─ SPA Vue 2.7 embarcada
   ├─ manager de campanhas e mensagens transacionais
@@ -91,6 +112,32 @@ Entradas opcionais: webhooks de bounce e fluxos públicos, sempre pelo proxy.
 
 O frontend não é um serviço separado e não existe binário de worker independente nesta release. Uma instância ativa executa HTTP e jobs; réplicas com `--passive` atendem HTTP sem iniciar o scanner de campanhas. Redis não integra a arquitetura atual.
 
+### Organização do código
+
+| Caminho | Conteúdo |
+|---|---|
+| `cmd/` | processo HTTP, CLI, handlers do core e handlers MailView |
+| `internal/mailview/` | Control Plane, Data Plane, tenant context/RLS, migrations, jobs e segurança próprias |
+| `internal/core/`, `internal/manager/` | campanhas, listas, templates, usuários, entrega e workers herdados e adaptados |
+| `models/`, `queries/`, `schema.sql` | modelos e SQL do core compatível |
+| `frontend/src/` | SPA Vue, portal do cliente e administração da plataforma |
+| `static/`, `i18n/` | páginas públicas, templates e idiomas embarcados |
+| `deploy/` | Caddy, Compose de produção, role restrita e secrets |
+| `docs/` | arquitetura, API, ferramentas, integrações e operação da release |
+
+### Fluxo entre componentes
+
+```text
+Cliente/operador
+  └─ HTTPS :443 → Caddy
+       └─ HTTP :9000 → MailView
+            ├─ SQL :5432 → PostgreSQL (role sem BYPASSRLS)
+            ├─ SMTP :25/:465/:587 → relay de entrega
+            ├─ POP3 :110/:995 → mailbox de bounces (opcional)
+            ├─ HTTPS :443 → S3/OIDC/captcha/postbacks (opcional)
+            └─ DNS :53 → verificação/revalidação de domínio
+```
+
 Veja [Arquitetura](docs/ARQUITETURA.md), [Integrações](docs/INTEGRACOES.md) e [Referência operacional](docs/REFERENCIA_OPERACIONAL.md).
 
 ## Portas
@@ -99,7 +146,7 @@ Veja [Arquitetura](docs/ARQUITETURA.md), [Integrações](docs/INTEGRACOES.md) e 
 |---|---|---|---|
 | `80/tcp` | HTTP | redirect/ACME no proxy | pública |
 | `443/tcp` | HTTPS | painel, API, páginas, tracking e webhooks | pública |
-| `9000/tcp` | HTTP | processo `mailview` | somente proxy/rede privada |
+| `9000/tcp` | HTTP | processo `MailView` | somente proxy/rede privada |
 | `5432/tcp` | PostgreSQL | aplicação → banco | somente rede de dados |
 | `25`, `465`, `587/tcp` | SMTP/SMTPS/Submission | aplicação → relay externo | somente saída, conforme provedor |
 | `110`, `995/tcp` | POP3/POP3S | aplicação → mailbox de bounces | somente saída, opcional |
@@ -110,7 +157,11 @@ O Compose local publica `10443:9000` e, apenas em loopback, `15432:5432`. Portas
 
 ## Requisitos
 
-Software de build: Go 1.26.5, Node.js 22, Yarn 1.22 e Docker/Compose v2. Runtime: Linux containerizado ou SO suportado pelo Go, PostgreSQL 17 recomendado e acesso a um relay SMTP ou mensageiro HTTP.
+Software de build: Go 1.26.5, Node.js 22, Yarn 1.22, Vite 5/6, Vue 2.7,
+GoReleaser 2 e Docker/Compose v2. Runtime: Linux containerizado ou SO suportado
+pelo Go, PostgreSQL 17 recomendado, Caddy 2.10 na topologia de referência e
+acesso a um relay SMTP ou mensageiro HTTP. O navegador deve suportar JavaScript
+moderno, cookies/sessão e TLS 1.2 ou superior.
 
 Referência inicial de capacidade — não é benchmark nem SLA:
 
@@ -166,11 +217,12 @@ make dist           # ./MailView com SPA/SQL/i18n embarcados
 Convenção desta release:
 
 - binário: `MailView` (`MailView.exe` no Windows);
-- tag Git SemVer: `v0.5.0`;
-- arquivos: `MailView_0.5.0_<sistema>_<arquitetura>.tar.gz`;
-- checksum: `MailView_0.5.0_checksums.txt`;
-- imagem: `ghcr.io/jr1machado/mailview:v0.5.0` (OCI exige nome minúsculo);
-- título da release: `MailView v0.5.0`.
+- tag Git SemVer: `v0.6.0`;
+- arquivos: `MailView_0.6.0_<sistema>_<arquitetura>.tar.gz`;
+- checksum: `MailView_0.6.0_checksums.txt`;
+- imagem: `ghcr.io/jr1machado/mailview:v0.6.0` (OCI exige nome minúsculo);
+- pacote interno do editor: `@mailview/email-builder` (npm exige minúsculas);
+- título da release: `MailView v0.6.0`.
 
 ## Configuração e compatibilidade
 
@@ -194,8 +246,8 @@ O módulo Go também conserva `github.com/knadh/listmonk` para evitar uma reescr
 - [Integrações](docs/INTEGRACOES.md)
 - [Ferramentas e cadeia de entrega](docs/FERRAMENTAS.md)
 - [Hardware, software, portas e operação](docs/REFERENCIA_OPERACIONAL.md)
-- [Release notes v0.5.0](RELEASE_NOTES.md)
-- [Issues conhecidos v0.5.0](ISSUES_CONHECIDOS.md)
+- [Release notes v0.6.0](RELEASE_NOTES.md)
+- [Issues conhecidos v0.6.0](ISSUES_CONHECIDOS.md)
 - [Roadmap e decisões](INFO/Biblia-Projeto.md)
 - [Licença AGPL-3.0](LICENSE)
 

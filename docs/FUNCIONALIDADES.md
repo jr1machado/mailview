@@ -1,4 +1,4 @@
-# Funções e recursos do MailView — v0.5.0
+# Funções e recursos do MailView — v0.6.0
 
 ## Portais e governança da Fase 4
 
@@ -12,6 +12,53 @@
   para contatos;
 - impersonation com MFA recente, TTL, motivo, aprovação opcional por segundo
   operador e banner persistente.
+- mapa de ambientes por cliente com faixas compartilhada, provisionamento e
+  dedicada, cartões de tenant e recursos visualizados;
+- identificação persistente do hostname e tenant ativo em todas as telas do
+  portal do cliente.
+
+## Inventário funcional detalhado
+
+### Administração do cliente
+
+- criação, leitura, alteração de status e lifecycle do tenant;
+- slug canônico, aliases temporários e redirecionamento 308;
+- domínio por finalidade, desafio TXT/CNAME, verificação e revalidação;
+- owner, memberships, papéis, permissões e negações explícitas;
+- plano, quota registrada, estado de infraestrutura e auditoria;
+- mapa visual de isolamento e abertura do detalhe a partir do cartão.
+
+### Operação de marketing
+
+- CRUD, cópia, preview, test send, agendamento, envio, pausa/cancelamento,
+  archive e analytics de campanhas;
+- workflow adicional de draft/review/approval/rejection/scheduling com lock,
+  revisão e idempotency key;
+- templates HTML/texto, editor visual, mídia e anexos;
+- listas públicas/privadas, opt-in simples/duplo, queries e segmentação;
+- contatos, atributos JSON, tags, consentimento, blocklist, supressão,
+  exportação, wipe e operações em lote;
+- import CSV tenant assíncrono com listas alvo, HMAC, progresso e cancelamento.
+
+### Entrega, tracking e público
+
+- SMTP único, múltiplos SMTPs, grupos balanceados e messenger HTTP;
+- mensagens transacionais, páginas de inscrição/preferências, archive,
+  unsubscribe, export e wipe do titular;
+- pixels de abertura, links, visualização web, bounces e complaints;
+- POP3 e webhooks de provedores para retorno de bounces;
+- filesystem ou S3 para mídia, com chave/prefixo físico por tenant.
+
+### Segurança e plataforma
+
+- login local, sessão, API token herdado, OIDC, TOTP cifrado e recovery codes;
+- role PostgreSQL restrita, transação tenant, `SET LOCAL`, FORCE RLS, FKs
+  compostas e índices tenant-first;
+- papéis tenant e plataforma separados, custom roles premium e denial;
+- impersonação de suporte com MFA recente, razão, TTL, aprovação e auditoria;
+- dashboard global, incidentes, logs, health, manutenção e audit trail;
+- container não-root/read-only, secrets `_FILE`, TLS no edge e builds assináveis
+  por checksum.
 
 ## Comunicação e dados
 
@@ -27,7 +74,7 @@
 
 ## Matriz funcional da release
 
-| Domínio | Função | Situação em v0.5.0 |
+| Domínio | Função | Situação em v0.6.0 |
 |---|---|---|
 | identidade | usuário local, senha, sessão e reset | implementado pelo core |
 | identidade | OIDC e TOTP | implementado; membership tenant continua explícita |
@@ -35,6 +82,8 @@
 | tenants | criar, consultar, suspender, reativar e offboard | implementado e auditado |
 | tenants | slug reservado, alteração e alias 308 | implementado |
 | tenants | domínio customizado e ownership TXT/CNAME | implementado com revalidação |
+| tenants | mapa visual shared/provisioning/dedicated | implementado no Control Plane |
+| tenants | faixa persistente do tenant ativo | implementado no portal do cliente |
 | tenants | SPF/DKIM/DMARC e tracking final | configuração operacional externa |
 | RBAC | papéis tenant/plataforma e memberships | implementado |
 | RBAC | custom roles premium e denial explícito | implementado |

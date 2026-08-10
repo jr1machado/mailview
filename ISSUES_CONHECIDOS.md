@@ -1,4 +1,4 @@
-# MailView v0.5.0 — Issues conhecidos
+# MailView v0.6.0 — Issues conhecidos
 
 Limitações confirmadas desta release; roadmap não deve ser confundido com recurso entregue.
 
@@ -13,6 +13,12 @@ Limitações confirmadas desta release; roadmap não deve ser confundido com rec
 
 ## Produto e multi-tenancy
 
+- O mapa de ambientes consulta a infraestrutura de cada tenant após carregar a
+  lista. Em instalações com muitos milhares de tenants isso produz múltiplas
+  requisições e deve evoluir para um endpoint agregado/paginado.
+- A faixa do tenant ativo identifica hostname e UUID abreviado; esta release
+  não implementa um seletor de tenant no mesmo host. A troca de cliente ocorre
+  pelo hostname/rota autorizada correspondente.
 - Planos, quotas e usage são modelo/gestão; limites não bloqueiam contatos, envios, domínios ou seats.
 - Billing accounts, subscriptions e invoices têm modelo tenant/RLS; o dashboard deriva MRR/ARR das invoices pagas, mas gateway, cobrança recorrente e conciliação não estão implementados.
 - `dedicated_requested`/`dedicated` valida e publica o contrato de roteamento; não provisiona fisicamente banco, SMTP, storage, worker, KMS ou namespace.

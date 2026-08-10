@@ -1,4 +1,4 @@
-# API MailView — v0.5.0
+# API MailView — v0.6.0
 
 Rotas administrativas exigem autenticação. Data Plane exige tenant ativo, membership/grant, permissão e transação RLS.
 
@@ -53,16 +53,50 @@ ator não possua, evitando elevação por delegação.
 
 ## Control Plane `/api/mailview`
 
-- `GET/POST /tenants`; `GET/PATCH /tenants/:tenantID`; `POST /tenants/:tenantID/slug`;
-- `GET/POST /tenants/:tenantID/roles` e `POST/DELETE .../roles/:roleID/permissions/:code/deny`;
-- `GET/POST /tenants/:tenantID/memberships` e `PUT .../:membershipID/roles`;
-- `GET /tenants/:tenantID/audit-events`;
-- `GET/POST /tenants/:tenantID/data/lists|subscribers|import-jobs`, detalhe/cancelamento de job;
-- `GET/POST /tenants/:tenantID/domains`, `POST .../:domainID/verify|revoke|tls`; `POST /domains/revalidate`;
-- `GET/PUT /tenants/:tenantID/quota`, `GET /plans`, `GET /dashboard`;
-- `POST /tenants/:tenantID/owner`; `GET/POST /tenants/:tenantID/infrastructure`.
+| Método | Rota | Função |
+|---|---|---|
+| `GET/POST` | `/tenants` | listar/criar tenants |
+| `GET/PATCH` | `/tenants/:tenantID` | detalhe e alteração de status |
+| `POST` | `/tenants/:tenantID/slug` | trocar slug e criar alias 308 |
+| `GET/POST` | `/tenants/:tenantID/roles` | listar/criar papel customizado |
+| `POST/DELETE` | `/tenants/:tenantID/roles/:roleID/permissions/:code/deny` | negar/remover negação explícita |
+| `GET/POST` | `/tenants/:tenantID/memberships` | listar/criar membership |
+| `PUT` | `/tenants/:tenantID/memberships/:membershipID/roles` | substituir papéis do membro |
+| `GET` | `/tenants/:tenantID/audit-events` | consultar auditoria tenant |
+| `GET/POST` | `/tenants/:tenantID/data/lists` | listar/criar listas no contexto tenant |
+| `GET/POST` | `/tenants/:tenantID/data/subscribers` | listar/criar contatos no contexto tenant |
+| `GET/POST` | `/tenants/:tenantID/data/import-jobs` | listar/criar importações CSV |
+| `GET` | `/tenants/:tenantID/data/import-jobs/:jobID` | progresso e resultado do job |
+| `POST` | `/tenants/:tenantID/data/import-jobs/:jobID/cancel` | solicitar cancelamento |
+| `GET/POST` | `/tenants/:tenantID/domains` | listar/criar domínios |
+| `POST` | `/tenants/:tenantID/domains/:domainID/verify` | consultar ownership no DNS |
+| `POST` | `/tenants/:tenantID/domains/:domainID/revoke` | revogar domínio |
+| `POST` | `/tenants/:tenantID/domains/:domainID/tls` | controller reportar estado TLS |
+| `POST` | `/domains/revalidate` | revalidar domínios vencidos |
+| `GET/PUT` | `/tenants/:tenantID/quota` | consultar/aplicar plano de quota |
+| `GET` | `/plans` | listar catálogo de planos |
+| `GET` | `/dashboard` | métricas globais da plataforma |
+| `POST` | `/tenants/:tenantID/owner` | redefinir owner e invalidar sessão |
+| `GET/POST` | `/tenants/:tenantID/infrastructure` | consultar/configurar rota de infraestrutura |
 
 `POST .../slug` recebe `slug` e `redirect_days` (1–365). Criação de domínio recebe `hostname`, `purpose` e `verification_method` (`txt|cname`) e devolve `verification_name`/`verification_value`. `verify` consulta DNS ao vivo. Infraestrutura `dedicated` exige `database_ref`, `worker_ref`, `smtp_ref`, `storage_ref`, `encryption_key_ref` e `docker_namespace`.
+
+O mapa visual da v0.6.0 consome a listagem de tenants e o `GET` de
+infraestrutura. Ele é uma representação do contrato acima e não altera a
+fronteira de autorização nem aceita `tenant_id` proveniente de um campo visual.
+
+## Formato, contexto e erros
+
+Respostas JSON seguem o envelope `{"data": ...}`. IDs MailView são UUID;
+entidades compatíveis do core podem conservar IDs inteiros. Entradas inválidas,
+conflitos, ausência e falta de permissão são convertidas para códigos HTTP 4xx;
+falhas inesperadas retornam 5xx e devem ser correlacionadas pelos logs. O
+cliente deve tratar retries de mutação somente quando a rota possuir
+idempotency key explícita.
+
+Em Data Plane, `tenant_id`, `user_id` e `request_id` são colocados com
+`SET LOCAL` na transação. Em páginas públicas o hostname determina o tenant; em
+jobs, um envelope HMAC determina o tenant depois da validação da assinatura.
 
 ## Plataforma
 

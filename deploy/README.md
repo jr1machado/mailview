@@ -1,4 +1,4 @@
-# Deploy de produção do MailView v0.5.0
+# Deploy de produção do MailView v0.6.0
 
 A topologia fornecida executa Caddy (80/443), o binário monolítico MailView (9000 interno) e PostgreSQL (5432 interno). Frontend e workers estão no binário; não há Redis.
 

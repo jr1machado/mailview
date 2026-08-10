@@ -1,8 +1,10 @@
-# Referência operacional do MailView v0.5.0
+# Referência operacional do MailView v0.6.0
 
 ## Stack e capacidade
 
-Build: Go 1.26.5, Node 22, Yarn 1.22, Vue 2.7.14 e Vite 5.4. Runtime: Alpine 3.23, PostgreSQL 17 e Docker Compose v2. Targets estão na configuração GoReleaser.
+Build: Go 1.26.5, Node 22, Yarn 1.22, Vue 2.7.14, React 18.2 e Vite
+5.4/6.4. Runtime: Alpine 3.23, PostgreSQL 17 e Docker Compose v2. Targets
+estão na configuração GoReleaser.
 
 Não há benchmark/SLA. Baseline: piloto 2 vCPU/2–4 GiB/20 GiB SSD; produção inicial app 2–4 vCPU/4–8 GiB e PostgreSQL 4 vCPU/8 GiB/50+ GiB SSD. Dimensione por contatos, tamanho de templates, concorrência, tracking, retenção, IOPS e latência/limites do SMTP.
 
